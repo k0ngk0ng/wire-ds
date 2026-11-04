@@ -10,6 +10,7 @@ function render(state: AppState) {
   document.documentElement.dataset.theme = state.settings.theme;
   document.documentElement.dataset.platform = state.platform;
   document.body.classList.toggle('has-error', state.loadState === 'error');
+  document.querySelector<HTMLElement>('.connection-page')!.hidden = state.loadState === 'ready';
   const connection = document.getElementById('connection')!;
   connection.className = `connection ${state.loadState}`;
   connection.setAttribute('aria-label', state.loadState === 'ready' ? '已连接' : state.loadState === 'error' ? '连接失败' : '正在连接');

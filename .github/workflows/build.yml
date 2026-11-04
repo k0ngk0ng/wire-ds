@@ -47,7 +47,7 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - name: Desktop E2E
-        if: matrix.arch == 'arm64'
+        if: matrix.arch == 'arm64' || matrix.platform == 'win'
         run: npm run test:e2e
       - name: Package application
         run: npm run build && node scripts/package.mjs --${{ matrix.platform }} --${{ matrix.arch }}
@@ -65,10 +65,10 @@ jobs:
             release/*.exe
             release/SHA256SUMS-*.txt
       - name: Upload E2E evidence
-        if: always() && matrix.arch == 'arm64'
+        if: always() && (matrix.arch == 'arm64' || matrix.platform == 'win')
         uses: actions/upload-artifact@v4
         with:
-          name: e2e-evidence
+          name: e2e-evidence-${{ matrix.platform }}-${{ matrix.arch }}
           path: |
             playwright-report/
             test-results/
