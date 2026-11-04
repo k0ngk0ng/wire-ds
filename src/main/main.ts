@@ -339,6 +339,7 @@ class Desktop {
   }
 
   show(fromShortcut = false) {
+    if (fromShortcut && this.host === 'chat' && this.mode !== this.store.value.defaultMode) this.setMode(this.store.value.defaultMode);
     const win = this.owner();
     if (win.isMinimized()) win.restore();
     if (!win.isVisible() || fromShortcut) {
@@ -346,6 +347,7 @@ class Desktop {
       const current = screen.getDisplayMatching(win.getBounds());
       if (fromShortcut || current.id !== display.id) win.setBounds(this.fittedBounds(win.getBounds(), true));
     }
+    if (process.platform === 'darwin') app.focus({ steal: true });
     win.show(); win.focus(); this.lastForeground = true;
     if (this.host === 'chat') { this.view.webContents.focus(); this.configurePage(true); }
     if (fromShortcut && this.host === 'chat' && this.store.value.summonBehavior === 'new') this.pageAction('new-chat');

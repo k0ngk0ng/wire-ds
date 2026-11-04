@@ -23,8 +23,11 @@ async function launch(name: string, existing = false) {
     env: { ...process.env, WIRE_DS_TEST: '1', WIRE_DS_TEST_URL: service.url, WIRE_DS_DATA_DIR: dataDir, WIRE_DS_TEST_SHORTCUT: 'F6', TMPDIR: path.join(root, '.cache/tmp') },
     timeout: 30_000,
   });
-  shell = await desktop.firstWindow();
-  await shell.waitForURL(/shell\.html/);
+  // BrowserWindow and WebContentsView targets can arrive in different orders on CI.
+  // Select the shell by its actual document rather than assuming the first target.
+  await expect.poll(() => desktop.windows().some(p => /\/shell\.html$/.test(p.url())), { timeout: 20_000 }).toBe(true);
+  shell = desktop.windows().find(p => /\/shell\.html$/.test(p.url()))!;
+  await shell.waitForLoadState('domcontentloaded');
   await expect.poll(async () => desktop.windows().some(p => p.url().startsWith(service.url))).toBe(true);
   web = desktop.windows().find(p => p.url().startsWith(service.url))!;
   await web.waitForLoadState('domcontentloaded');
@@ -46,8 +49,10 @@ test.beforeAll(async () => { service = await startFixture(); await mkdir(path.jo
 test.afterAll(async () => { await service.close(); });
 test.afterEach(async ({}, info) => {
   if (desktop) {
+    await info.attach('desktop-state', { body: JSON.stringify(await state().catch(() => ({ unavailable: true })), null, 2), contentType: 'application/json' });
     for (const [i, page] of desktop.windows().entries()) {
-      if (!page.isClosed()) await page.screenshot({ path: info.outputPath(`window-${i}.png`) }).catch(() => {});
+      const visible = !page.isClosed() && await page.evaluate(() => document.visibilityState === 'visible').catch(() => false);
+      if (visible) await page.screenshot({ path: info.outputPath(`window-${i}.png`), timeout: 2000 }).catch(() => {});
     }
     await desktop.close().catch(() => {});
   }
@@ -78,7 +83,10 @@ test('快速/完整窗口保留草稿、生成状态与网页实例，并可收�
   await expect(web.locator('#messages')).toContainText('回答片段 回答片段 回答片段');
   await shell.getByRole('button', { name: '切换到快捷窗口' }).click();
   await expect.poll(async () => (await state()).mode).toBe('quick');
-  await action('shortcut');
+  // CDP focus does not activate an OS window. Close through the real lifecycle,
+  // then exercise the global-shortcut callback from a hidden background state.
+  // Foreground F2 toggling is checked separately with native keyboard input.
+  await action('close');
   await expect.poll(async () => (await state()).visible).toBe(false);
   await action('shortcut');
   await expect.poll(async () => (await state()).visible).toBe(true);
