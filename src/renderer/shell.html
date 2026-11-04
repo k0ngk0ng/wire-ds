@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'"><title>Wire DeepSeek</title><link rel="stylesheet" href="app.css"></head>
+<body class="shell" data-surface="chat">
+  <header class="titlebar">
+    <div class="brand"><img class="deepseek-mark" src="deepseek.svg" alt=""><span>DeepSeek</span><span class="connection" id="connection" aria-label="正在连接"></span></div>
+    <span id="notice" class="header-notice" role="status" aria-live="polite"></span>
+    <nav class="toolbar" aria-label="窗口操作">
+      <button class="icon-button" data-action="sidebar" id="sidebar" aria-label="展开侧边栏" title="展开侧边栏"></button>
+      <button class="icon-button" data-action="new-chat" aria-label="新对话" title="新对话 ⌘N" data-icon="new"></button>
+      <span class="toolbar-divider"></span>
+      <button class="icon-button" data-action="pin" id="pin" aria-label="固定置顶" title="固定置顶" data-icon="pin" aria-pressed="false"></button>
+      <button class="icon-button" data-action="toggle-mode" id="mode" aria-label="展开窗口" title="展开窗口" data-icon="expand"></button>
+      <button class="icon-button" data-action="settings" aria-label="设置" title="设置 ⌘," data-icon="settings"></button>
+    </nav>
+  </header>
+  <main class="connection-page"><div class="connection-content"><div class="error-symbol" aria-hidden="true">↻</div><h1 id="error-title">正在连接 DeepSeek</h1><p id="error-detail">保留官网体验，随时开始对话。</p><div class="error-actions"><button class="primary" data-action="retry">重试</button><button class="secondary" data-action="website">在浏览器中打开</button></div></div></main>
+  <script src="shell.js"></script>
+</body></html>

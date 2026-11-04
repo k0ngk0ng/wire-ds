@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'"><title>Wire DeepSeek 设置</title><link rel="stylesheet" href="app.css"></head>
+<body class="settings"><header class="titlebar settings-titlebar"><span>设置</span></header><main class="settings-content">
+  <div class="settings-intro"><div class="app-mark"><img src="deepseek.svg" alt="DeepSeek"></div><div><h1>Wire DeepSeek</h1><p>让对话，随时发生。</p></div></div>
+  <section class="settings-section" aria-labelledby="shortcut-heading"><h2 id="shortcut-heading">全局快捷键</h2><div class="settings-card shortcut-card"><div class="shortcut-top"><div><label id="shortcut-label">呼出与收起窗口</label><p>在任何应用中快速开始对话</p></div><button id="record-shortcut" class="shortcut-recorder" aria-label="录制快捷键" aria-describedby="shortcut-help"><kbd id="shortcut-value">F2</kbd><span class="record-dot" aria-hidden="true"></span></button></div><div class="shortcut-bottom"><span id="shortcut-help">点击右侧按键，录制新的快捷键</span><button id="save-shortcut" class="small-button" hidden>保存快捷键</button><button id="cancel-shortcut" class="text-button" hidden>取消</button></div><div id="shortcut-warning" class="inline-warning" hidden></div></div></section>
+  <section class="settings-section" aria-labelledby="behavior-heading"><h2 id="behavior-heading">窗口与对话</h2><div class="settings-card">
+    <div class="setting-row"><label for="summon">呼出时</label><select id="summon" aria-label="呼出时"><option value="continue">继续上次对话</option><option value="new">开启新对话</option></select></div>
+    <div class="setting-row"><label for="default-mode">默认窗口</label><select id="default-mode" aria-label="默认窗口"><option value="quick">快捷窗口</option><option value="full">完整窗口</option></select></div>
+    <div class="setting-row"><label for="always-on-top">始终置顶</label><input type="checkbox" role="switch" id="always-on-top" aria-label="始终置顶"></div>
+    <div class="setting-row"><label for="auto-size">快捷窗口随对话调整高度</label><input type="checkbox" role="switch" id="auto-size" aria-label="快捷窗口随对话调整高度"></div>
+    <div class="setting-row"><label for="max-height">最大高度</label><select id="max-height" aria-label="最大高度"><option value="0.6">屏幕可用高度的 60%</option><option value="0.8">屏幕可用高度的 80%</option><option value="0.9">屏幕可用高度的 90%</option></select></div>
+  </div></section>
+  <section class="settings-section" aria-labelledby="general-heading"><h2 id="general-heading">通用</h2><div class="settings-card">
+    <div class="setting-row"><label for="theme">主题</label><select id="theme" aria-label="主题"><option value="system">跟随系统</option><option value="light">浅色</option><option value="dark">深色</option></select></div>
+    <div class="setting-row"><div><label for="launch-at-login">登录 Mac 时启动</label><p id="launch-note" hidden>安装应用后可开启</p></div><input type="checkbox" role="switch" id="launch-at-login" aria-label="登录 Mac 时启动"></div>
+  </div></section>
+  <div class="feedback"><p id="settings-status" role="status" aria-live="polite"></p><p id="settings-error" role="alert" hidden></p></div>
+  <footer class="settings-footer"><span id="version">版本 1.0.0</span><span>独立客户端 · 登录与对话由 DeepSeek 提供</span><button class="text-button" data-action="website">打开官网 <span aria-hidden="true">↗</span></button></footer>
+</main><script src="settings.js"></script></body></html>

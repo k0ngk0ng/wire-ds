@@ -1,0 +1,92 @@
+{
+  "name": "wire-ds",
+  "productName": "Wire DeepSeek",
+  "version": "1.0.0",
+  "description": "DeepSeek desktop companion with a configurable global shortcut",
+  "private": true,
+  "main": "dist/main/main.js",
+  "author": "Wire DeepSeek contributors",
+  "license": "MIT",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "start": "node scripts/start.mjs",
+    "dev": "npm run build && npm start",
+    "typecheck": "tsc --noEmit",
+    "test:e2e": "npm run build && playwright test",
+    "test:e2e:headed": "npm run test:e2e",
+    "package": "npm run build && node scripts/package.mjs",
+    "package:mac": "npm run build && node scripts/package.mjs --mac",
+    "package:win": "npm run build && node scripts/package.mjs --win",
+    "package:universal": "npm run build && node scripts/package.mjs --universal",
+    "verify": "npm run typecheck && npm run test:e2e"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.1",
+    "@resvg/resvg-js": "^2.6.2",
+    "@types/node": "^24.10.0",
+    "electron": "45.2.2",
+    "electron-builder": "26.18.0",
+    "esbuild": "^0.27.0",
+    "typescript": "~5.9.3"
+  },
+  "build": {
+    "appId": "com.wire.deepseek",
+    "productName": "Wire DeepSeek",
+    "artifactName": "Wire-DeepSeek-${version}-${arch}.${ext}",
+    "directories": {
+      "output": "release",
+      "buildResources": "assets"
+    },
+    "files": [
+      "dist/**/*",
+      "assets/icon.png",
+      "assets/trayTemplate*.png",
+      "package.json"
+    ],
+    "asar": true,
+    "mac": {
+      "category": "public.app-category.productivity",
+      "icon": "assets/icon.icns",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "identity": "-",
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false,
+      "entitlements": "assets/entitlements.mac.plist",
+      "entitlementsInherit": "assets/entitlements.mac.plist",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "仅在你使用 DeepSeek 网页语音功能时访问麦克风。",
+        "NSCameraUsageDescription": "仅在你使用 DeepSeek 网页拍摄功能时访问摄像头。"
+      }
+    },
+    "win": {
+      "icon": "assets/icon.ico",
+      "target": [{ "target": "nsis", "arch": ["x64"] }],
+      "signAndEditExecutable": true
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Wire DeepSeek",
+      "deleteAppDataOnUninstall": false
+    },
+    "dmg": {
+      "title": "Wire DeepSeek",
+      "window": {
+        "width": 540,
+        "height": 440
+      },
+      "contents": [
+        { "x": 145, "y": 140 },
+        { "x": 395, "y": 140, "type": "link", "path": "/Applications" },
+        { "x": 145, "y": 300, "type": "file", "path": "scripts/install-mac.command", "name": "安装到本机.command" },
+        { "x": 395, "y": 300, "type": "file", "path": "docs/mac-install.md", "name": "首次运行说明.md" }
+      ]
+    }
+  }
+}
