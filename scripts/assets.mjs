@@ -14,11 +14,11 @@ icoHeader[6] = 0; icoHeader[7] = 0;
 icoHeader.writeUInt16LE(1, 10); icoHeader.writeUInt16LE(32, 12);
 icoHeader.writeUInt32LE(icoPNG.length, 14); icoHeader.writeUInt32LE(22, 18);
 await writeFile('assets/icon.ico', Buffer.concat([icoHeader, icoPNG]));
-await mkdir('.cache/Wire.iconset', { recursive: true });
+await mkdir('.cache/ChatDeepSeek.iconset', { recursive: true });
 for (const size of [16, 32, 128, 256, 512]) {
-  await writeFile(`.cache/Wire.iconset/icon_${size}x${size}.png`, png(size));
-  await writeFile(`.cache/Wire.iconset/icon_${size}x${size}@2x.png`, png(size * 2));
+  await writeFile(`.cache/ChatDeepSeek.iconset/icon_${size}x${size}.png`, png(size));
+  await writeFile(`.cache/ChatDeepSeek.iconset/icon_${size}x${size}@2x.png`, png(size * 2));
 }
-if (process.platform === 'darwin') execFileSync('iconutil', ['-c', 'icns', '.cache/Wire.iconset', '-o', 'assets/icon.icns']);
+if (process.platform === 'darwin') execFileSync('iconutil', ['-c', 'icns', '.cache/ChatDeepSeek.iconset', '-o', 'assets/icon.icns']);
 const tray = brand.replace(/fill="#[0-9a-f]{6}"/gi, 'fill="#000000"').replace(/fill="rgb\([^)]+\)"/g, 'fill="#000000"');
 for (const [size, suffix] of [[18, ''], [36, '@2x']]) await writeFile(`assets/trayTemplate${suffix}.png`, new Resvg(tray, { fitTo: { mode: 'width', value: size } }).render().asPng());

@@ -7,9 +7,10 @@ import type { AppState, Result, Settings, WindowMode, SavedBounds } from '../sha
 
 const projectRoot = path.resolve(__dirname, '../..');
 const testing = !app.isPackaged && process.env.WIRE_DS_TEST === '1';
+// Keep the historical profile directory and appId so renaming preserves login state.
 const dataDirectory = process.env.WIRE_DS_DATA_DIR || (app.isPackaged ? path.join(app.getPath('appData'), 'Wire DeepSeek') : path.join(projectRoot, '.runtime', 'development'));
 for (const directory of [dataDirectory, path.join(dataDirectory, 'logs'), path.join(dataDirectory, 'crashes'), path.join(dataDirectory, 'sessions')]) fs.mkdirSync(directory, { recursive: true });
-app.setName('Wire DeepSeek');
+app.setName('ChatDeepSeek');
 app.setPath('userData', dataDirectory);
 app.setPath('sessionData', path.join(dataDirectory, 'sessions'));
 app.setPath('logs', path.join(dataDirectory, 'logs'));
@@ -92,7 +93,7 @@ class Desktop {
   private createHost(page: string, bounds: SavedBounds) {
     const win = new BrowserWindow({
       ...bounds, minWidth: 460, minHeight: 360, show: false,
-      title: page === 'login' ? '登录 DeepSeek' : 'Wire DeepSeek',
+      title: page === 'login' ? '登录 DeepSeek' : 'ChatDeepSeek',
       titleBarStyle: process.platform === 'win32' ? 'hidden' : 'hiddenInset', trafficLightPosition: { x: 17, y: 20 },
       ...(process.platform === 'win32' ? { titleBarOverlay: this.overlayOptions() } : {}),
       icon: path.join(projectRoot, 'assets/icon.png'),
@@ -425,7 +426,7 @@ class Desktop {
   openSettings() {
     if (this.preferences && !this.preferences.isDestroyed()) { this.preferences.show(); this.preferences.focus(); return; }
     this.preferences = new BrowserWindow({ width: 640, height: 740, minWidth: 540, minHeight: 580, show: false, resizable: true,
-      title: 'Wire DeepSeek 设置', titleBarStyle: process.platform === 'win32' ? 'hidden' : 'hiddenInset', trafficLightPosition: { x: 17, y: 20 },
+      title: 'ChatDeepSeek 设置', titleBarStyle: process.platform === 'win32' ? 'hidden' : 'hiddenInset', trafficLightPosition: { x: 17, y: 20 },
       ...(process.platform === 'win32' ? { titleBarOverlay: this.overlayOptions() } : {}),
       backgroundColor: nativeTheme.shouldUseDarkColors ? '#15171b' : '#f7f8fb',
       webPreferences: { preload, sandbox: true, contextIsolation: true, nodeIntegration: false, spellcheck: false },
@@ -454,11 +455,11 @@ class Desktop {
 
   buildMenu() {
     const template: Electron.MenuItemConstructorOptions[] = [
-      { label: 'Wire DeepSeek', submenu: [
-        { role: 'about', label: '关于 Wire DeepSeek' }, { type: 'separator' },
+      { label: 'ChatDeepSeek', submenu: [
+        { role: 'about', label: '关于 ChatDeepSeek' }, { type: 'separator' },
         { label: '设置…', accelerator: 'CommandOrControl+,', click: () => this.openSettings() },
-        { type: 'separator' }, { role: 'hide', label: '隐藏 Wire DeepSeek' }, { role: 'hideOthers', label: '隐藏其他' },
-        { role: 'unhide', label: '显示全部' }, { type: 'separator' }, { role: 'quit', label: '退出 Wire DeepSeek' },
+        { type: 'separator' }, { role: 'hide', label: '隐藏 ChatDeepSeek' }, { role: 'hideOthers', label: '隐藏其他' },
+        { role: 'unhide', label: '显示全部' }, { type: 'separator' }, { role: 'quit', label: '退出 ChatDeepSeek' },
       ] },
       { label: '对话', submenu: [
         { label: '新对话', accelerator: 'CommandOrControl+N', click: () => { this.show(); this.pageAction('new-chat'); } },
@@ -476,7 +477,7 @@ class Desktop {
     ];
     Menu.setApplicationMenu(Menu.buildFromTemplate(template));
     tray?.setContextMenu(Menu.buildFromTemplate([
-      { label: '打开 Wire DeepSeek', click: () => this.show() },
+      { label: '打开 ChatDeepSeek', click: () => this.show() },
       { label: '新对话', click: () => { this.show(); this.pageAction('new-chat'); } },
       { label: `快捷键：${this.store.value.shortcut}${this.shortcutRegistered ? '' : '（不可用）'}`, enabled: false },
       { type: 'separator' }, { label: '设置…', click: () => this.openSettings() }, { label: '退出', click: () => app.quit() },
@@ -510,10 +511,10 @@ class Desktop {
 if (hasLock) {
   app.whenReady().then(() => {
     const trayIcon = nativeImage.createFromPath(path.join(projectRoot, process.platform === 'darwin' ? 'assets/trayTemplate.png' : 'assets/icon.png')).resize({ width: process.platform === 'darwin' ? 18 : 20, height: process.platform === 'darwin' ? 18 : 20 });
-    if (!trayIcon.isEmpty()) { if (process.platform === 'darwin') trayIcon.setTemplateImage(true); tray = new Tray(trayIcon); tray.setToolTip('Wire DeepSeek'); }
+    if (!trayIcon.isEmpty()) { if (process.platform === 'darwin') trayIcon.setTemplateImage(true); tray = new Tray(trayIcon); tray.setToolTip('ChatDeepSeek'); }
     controller = new Desktop();
     tray?.on('click', () => controller.show());
-    app.setAboutPanelOptions({ applicationName: 'Wire DeepSeek', applicationVersion: app.getVersion(), copyright: '独立桌面客户端 · 非 DeepSeek 官方应用', website: 'https://chat.deepseek.com/' });
+    app.setAboutPanelOptions({ applicationName: 'ChatDeepSeek', applicationVersion: app.getVersion(), copyright: '独立桌面客户端 · 非 DeepSeek 官方应用', website: 'https://chat.deepseek.com/' });
     const icon = nativeImage.createFromPath(path.join(projectRoot, 'assets/icon.png'));
     if (!icon.isEmpty()) app.dock?.setIcon(icon);
     if (testing) (globalThis as any).__wireTest = controller.testAPI();

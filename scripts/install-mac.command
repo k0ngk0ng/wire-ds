@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Only this application's copied bundle is touched. No global Gatekeeper setting changes.
 source_dir="$(cd "$(dirname "$0")" && pwd)"
-source_app="$source_dir/Wire DeepSeek.app"
+source_app="$source_dir/ChatDeepSeek.app"
 target_dir="$HOME/Applications"
 launch=1
 while [ "$#" -gt 0 ]; do
@@ -19,20 +19,20 @@ if [ ! -d "$source_app/Contents" ]; then
   printf '找不到应用：%s\n请从 DMG 内运行此脚本，或使用 --source 指定 .app。\n' "$source_app" >&2
   exit 1
 fi
-if /usr/bin/pgrep -x 'Wire DeepSeek' >/dev/null 2>&1; then
-  printf '请先从菜单栏退出 Wire DeepSeek，再运行安装脚本。\n' >&2
+if /usr/bin/pgrep -x 'ChatDeepSeek' >/dev/null 2>&1; then
+  printf '请先从菜单栏退出 ChatDeepSeek，再运行安装脚本。\n' >&2
   exit 1
 fi
 
 mkdir -p "$target_dir"
-target_app="$target_dir/Wire DeepSeek.app"
-staging_app="$target_dir/.Wire-DeepSeek-install-$$.app"
+target_app="$target_dir/ChatDeepSeek.app"
+staging_app="$target_dir/.ChatDeepSeek-install-$$.app"
 trap 'if [ -d "$staging_app" ]; then /bin/rm -rf "$staging_app"; fi' EXIT
 /usr/bin/ditto "$source_app" "$staging_app"
 /usr/bin/codesign --verify --deep --strict "$staging_app"
 /usr/bin/xattr -dr com.apple.quarantine "$staging_app"
 if [ -d "$target_app" ]; then
-  backup_app="$target_dir/Wire DeepSeek.backup-$(date +%Y%m%d-%H%M%S).app"
+  backup_app="$target_dir/ChatDeepSeek.backup-$(date +%Y%m%d-%H%M%S).app"
   /bin/mv "$target_app" "$backup_app"
   printf '旧版本保留在：%s\n' "$backup_app"
 fi

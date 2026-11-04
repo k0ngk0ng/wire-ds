@@ -53,11 +53,11 @@ jobs:
         run: npm run build && node scripts/package.mjs --${{ matrix.platform }} --${{ matrix.arch }}
       - name: Verify macOS signature
         if: matrix.platform == 'mac'
-        run: codesign --verify --deep --strict "release/mac${{ matrix.arch == 'arm64' && '-arm64' || '' }}/Wire DeepSeek.app"
+        run: codesign --verify --deep --strict "release/mac${{ matrix.arch == 'arm64' && '-arm64' || '' }}/ChatDeepSeek.app"
       - name: Upload installers
         uses: actions/upload-artifact@v4
         with:
-          name: wire-deepseek-${{ matrix.platform }}-${{ matrix.arch }}
+          name: chatdeepseek-${{ matrix.platform }}-${{ matrix.arch }}
           if-no-files-found: error
           path: |
             release/*.dmg
@@ -85,7 +85,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
-          pattern: wire-deepseek-*
+          pattern: chatdeepseek-*
           path: release
           merge-multiple: true
       - name: Publish GitHub release
@@ -93,5 +93,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" release/* \
-            --title "Wire DeepSeek $GITHUB_REF_NAME" \
+            --title "ChatDeepSeek $GITHUB_REF_NAME" \
             --notes-file docs/release-notes.md

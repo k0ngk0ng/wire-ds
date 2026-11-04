@@ -1,4 +1,4 @@
-# Wire DeepSeek
+# ChatDeepSeek
 
 使用 DeepSeek 官方网页的 macOS / Windows 桌面客户端。全局快捷键呼出快捷聊天窗口，随时展开为完整网页，保留官方登录、历史会话与聊天功能。
 
@@ -8,9 +8,9 @@
 
 | 系统 | 安装包 |
 | --- | --- |
-| Apple Silicon Mac | `Wire-DeepSeek-版本-arm64.dmg` |
-| Intel Mac | `Wire-DeepSeek-版本-x64.dmg` |
-| Windows x64 | `Wire-DeepSeek-版本-x64.exe` |
+| Apple Silicon Mac | `ChatDeepSeek-版本-arm64.dmg` |
+| Intel Mac | `ChatDeepSeek-版本-x64.dmg` |
+| Windows x64 | `ChatDeepSeek-版本-x64.exe` |
 
 macOS 构建使用 ad-hoc 签名，面向个人使用，不要求 Apple 开发者证书。首次从网络下载安装时，按 DMG 内的「首次运行说明.md」执行「安装到本机.command」。脚本将应用安装到 `~/Applications`，验证签名并只移除该应用副本的下载隔离属性；不关闭系统安全检查。详细步骤见 [macOS 安装说明](docs/mac-install.md)。
 
@@ -64,7 +64,7 @@ E2E 在真实 Electron 进程中验证窗口、持久化、快捷键注册、冲
 
 ## 数据与权限
 
-正式版数据目录：
+正式版沿用以下数据目录，以兼容更名前的登录数据和设置：
 
 - macOS：`~/Library/Application Support/Wire DeepSeek`
 - Windows：`%APPDATA%/Wire DeepSeek`

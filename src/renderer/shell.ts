@@ -6,7 +6,7 @@ let latest: AppState | undefined;
 let noticeTimer: ReturnType<typeof setTimeout> | undefined;
 function render(state: AppState) {
   latest = state;
-  if (state.testing) { const brand = document.querySelector('.brand span:nth-child(2)'); if (brand) brand.textContent = 'DeepSeek · 测试'; }
+  if (state.testing) { const brand = document.querySelector('.brand span:nth-child(2)'); if (brand) brand.textContent = 'ChatDeepSeek · 测试'; }
   document.documentElement.dataset.theme = state.settings.theme;
   document.documentElement.dataset.platform = state.platform;
   document.body.classList.toggle('has-error', state.loadState === 'error');

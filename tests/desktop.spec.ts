@@ -268,3 +268,12 @@ test('退出重启后继续上次会话，不只保留账号登录', async () =>
   await expect(web).toHaveURL(`${service.url}/a/chat/s/fixture-conversation`);
   await expect.poll(async () => (await state()).host).toBe('chat');
 });
+
+test('应用与设置统一显示 ChatDeepSeek，保留稳定应用标识', async () => {
+  await launch('application-name'); await signIn();
+  expect(await desktop.evaluate(({ app }) => app.getName())).toBe('ChatDeepSeek');
+  expect(await desktop.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find(w => /shell\.html$/.test(w.webContents.getURL()))!.getTitle())).toBe('ChatDeepSeek');
+  const prefs = await settings();
+  await expect(prefs.getByRole('heading', { name: 'ChatDeepSeek', exact: true })).toBeVisible();
+  expect(JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')).build.appId).toBe('com.wire.deepseek');
+});
