@@ -277,3 +277,88 @@ test('应用与设置统一显示 ChatDeepSeek，保留稳定应用标识', asyn
   await expect(prefs.getByRole('heading', { name: 'ChatDeepSeek', exact: true })).toBeVisible();
   expect(JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')).build.appId).toBe('com.wire.deepseek');
 });
+
+test('Thinking 出现时只点击一次折叠，每次提问生效，手动展开后保持展开', async () => {
+  await launch('thinking-stream'); await signIn();
+  await web.evaluate(() => { (window as any).thinkingMode = 'streaming'; });
+  await web.getByRole('button', { name: '发送', exact: true }).click();
+  const first = web.locator('[data-virtual-list-item-key="0"]');
+  await expect(first.locator('.thinking-title')).toBeVisible();
+  await expect(first.locator('.ds-think-content')).toHaveCount(0);
+  expect(await web.evaluate(() => (window as any).thoughts[0].clicks)).toBe(1);
+  await first.locator('.thinking-toggle').click();
+  await expect(first.locator('.ds-think-content')).toBeVisible();
+  await expect(first).toHaveAttribute('data-complete', 'true');
+  await expect(first.locator('.ds-think-content')).toBeVisible();
+  expect(await web.evaluate(() => (window as any).thoughts[0].clicks)).toBe(2);
+  await expect(first.locator('.ds-assistant-message-main-content')).toContainText('回答片段 回答片段');
+  await web.getByRole('button', { name: '发送', exact: true }).click();
+  const second = web.locator('[data-virtual-list-item-key="1"]');
+  await expect(second.locator('.thinking-title')).toBeVisible();
+  await expect(second.locator('.ds-think-content')).toHaveCount(0);
+  expect(await web.evaluate(() => (window as any).thoughts[1].clicks)).toBe(1);
+});
+
+test('官网已折叠的 Thinking 保持原状态，用户可展开；普通回答中的 Thinking 文本不受影响', async () => {
+  await launch('thinking-collapsed'); await signIn();
+  await web.evaluate(() => { (window as any).thinkingMode = 'collapsed'; });
+  await web.getByRole('button', { name: '发送', exact: true }).click();
+  const row = web.locator('[data-virtual-list-item-key="0"]');
+  await expect(row).toHaveAttribute('data-complete', 'true');
+  expect(await web.evaluate(() => (window as any).thoughts[0].clicks)).toBe(0);
+  await row.locator('.thinking-toggle').click();
+  await expect(row.locator('.ds-think-content')).toBeVisible();
+  await web.evaluate(() => {
+    const text = document.createElement('div'); text.className = 'ds-message';
+    text.innerHTML = '<p class="ds-markdown">Thinking is part of this ordinary answer.</p>';
+    document.querySelector('#messages')!.append(text);
+    (window as any).thoughts[0].title.textContent = '已深度思考（用时 2 秒）';
+  });
+  await expect(row.locator('.thinking-title')).toContainText('已深度思考');
+  await web.getByRole('button', { name: '发送', exact: true }).click();
+  await expect(web.locator('[data-virtual-list-item-key="1"]')).toHaveAttribute('data-complete', 'true');
+  expect(await web.evaluate(() => (window as any).thoughts[0].clicks)).toBe(1);
+  await expect(row.locator('.ds-think-content')).toBeVisible();
+  await expect(web.getByText('Thinking is part of this ordinary answer.', { exact: true })).toBeVisible();
+});
+
+test('快捷键呼出后等待输入框挂载并 focus，不模拟鼠标点击', async () => {
+  await launch('focus-late-composer'); await signIn();
+  const input = web.getByRole('textbox', { name: '给 DeepSeek 发送消息' });
+  await expect(input).toBeFocused();
+  await web.evaluate(() => {
+    (window as any).inputClicks = 0;
+    (window as any).savedComposer = document.querySelector('textarea');
+    (window as any).savedComposer.addEventListener('mousedown', (event: MouseEvent) => { if (event.isTrusted) (window as any).inputClicks++; });
+    (window as any).savedComposer.remove();
+  });
+  await action('hide'); await action('shortcut');
+  await expect.poll(async () => (await state()).visible).toBe(true);
+  await web.evaluate(() => document.querySelector('main')!.append((window as any).savedComposer));
+  await expect(input).toBeFocused();
+  expect(await web.evaluate(() => (window as any).inputClicks)).toBe(0);
+  await web.keyboard.type('直接输入');
+  await expect(input).toHaveValue('直接输入');
+});
+
+test('呼出后用户选择其他输入框或打开网页弹层时尊重焦点，后台刷新不抢焦点', async () => {
+  await launch('focus-user-intent'); await signIn();
+  await action('hide'); await action('shortcut');
+  const input = web.getByRole('textbox', { name: '给 DeepSeek 发送消息' });
+  await expect(input).toBeFocused();
+  await web.evaluate(() => {
+    const search = document.createElement('input'); search.setAttribute('aria-label', '网页搜索');
+    document.querySelector('main')!.append(search);
+  });
+  const search = web.getByRole('textbox', { name: '网页搜索' });
+  await search.click(); await search.fill('保留搜索焦点');
+  await web.evaluate(() => { const input = document.querySelector('textarea')!; input.replaceWith(input.cloneNode(true)); });
+  await expect(search).toBeFocused();
+  await web.getByRole('button', { name: '打开弹层' }).click();
+  await expect(web.getByRole('button', { name: '关闭', exact: true })).toBeFocused();
+  await action('hide');
+  await web.reload({ waitUntil: 'domcontentloaded' });
+  await expect.poll(async () => (await state()).loadState).toBe('ready');
+  await expect.poll(async () => (await state()).visible).toBe(false);
+  await expect(input).not.toBeFocused();
+});

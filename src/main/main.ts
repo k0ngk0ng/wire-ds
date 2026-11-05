@@ -75,7 +75,7 @@ class Desktop {
     this.buildMenu();
     this.main.on('resize', () => { this.layout(); this.scheduleBoundsSave(); });
     this.main.on('move', () => this.scheduleBoundsSave());
-    this.main.on('focus', () => { this.lastForeground = true; });
+    this.main.on('focus', () => { this.lastForeground = true; this.configurePage(true); });
     this.main.on('blur', () => { this.lastForeground = false; });
     this.main.on('close', event => { if (!quitting) { event.preventDefault(); this.hide(); } });
     screen.on('display-removed', () => this.keepVisible());
@@ -252,7 +252,10 @@ class Desktop {
   }
 
   private configurePage(focus = false) {
-    if (!this.view.webContents.isDestroyed()) this.view.webContents.send('wire:page-config', { quick: this.mode === 'quick' && this.host === 'chat', focus: focus && this.host === 'chat', theme: this.store.value.theme });
+    if (!this.view || this.view.webContents.isDestroyed()) return;
+    const focusChat = focus && this.host === 'chat' && this.main.isVisible();
+    if (focusChat && this.main.isFocused()) this.view.webContents.focus();
+    this.view.webContents.send('wire:page-config', { quick: this.mode === 'quick' && this.host === 'chat', focus: focusChat, theme: this.store.value.theme });
   }
 
   private attach(next: 'chat' | 'login') {

@@ -12,12 +12,35 @@ export async function startFixture() {
     <section id="chat" hidden><aside aria-label="历史对话"><button id="new">开启新对话</button><p>昨天的对话</p><button id="logout">退出登录</button></aside><main><button aria-label="收起侧边栏" id="sidebar-toggle">侧边栏</button><button id="mobile-new" aria-label="开启新对话"><svg width="18" height="18"><path d="M9.99994 1.22943C5 1 1 5 1 10"></path></svg></button><h1>有什么可以帮忙的？</h1><div id="messages"></div><textarea placeholder="给 DeepSeek 发送消息" aria-label="给 DeepSeek 发送消息"></textarea><button id="send">发送</button><button id="open-dialog">打开弹层</button><dialog><p>网页弹层</p><button id="close-dialog">关闭</button></dialog><input type="file" aria-label="上传附件"></main></section>
     <script>
     window.instanceId = crypto.randomUUID(); window.newCount = 0;
+    window.thinkingMode = 'off'; window.thoughts = [];
+    function thinkingReply(){
+      const index=window.thoughts.length, record={clicks:0,expanded:window.thinkingMode!=='collapsed',done:false};
+      window.thoughts.push(record);
+      const row=document.createElement('div');row.dataset.virtualListItemKey=String(index);
+      const message=document.createElement('div');message.className='ds-message';row.append(message);
+      const answer=document.createElement('p');answer.className='ds-assistant-message-main-content';
+      document.querySelector('#messages').append(row);
+      const content=document.createElement('div');content.className='ds-think-content';content.textContent='思考片段 ';
+      {
+        const group=document.createElement('div');group.className='thinking-section';group.style.setProperty('--collapsible-area-title-height','34px');
+        const header=document.createElement('div');header.className='thinking-title';
+        const toggle=document.createElement('div');toggle.className='thinking-toggle';toggle.style.cursor='pointer';
+        const title=document.createElement('span');title.textContent=record.done?'Thought for 2 seconds':'思考中…';
+        toggle.append(title);toggle.insertAdjacentHTML('beforeend','<svg width="14" height="14"><path d="M2 5L7 10L12 5"/></svg>');
+        header.append(toggle);group.append(header);
+        if(record.expanded)group.append(content);
+        toggle.onclick=()=>{record.clicks++;record.expanded=!record.expanded;if(record.expanded)group.append(content);else content.remove()};
+        message.prepend(group);record.title=title;
+      }
+      message.append(answer);
+      let i=0;const timer=setInterval(()=>{content.textContent+='思考片段 ';answer.textContent+='回答片段 ';if(++i===12){clearInterval(timer);record.done=true;record.title.textContent='Thought for 2 seconds';row.dataset.complete='true'}},100);
+    }
     function render(){const logged=localStorage.getItem('logged')==='yes';document.querySelector('#login').hidden=logged;document.querySelector('#chat').hidden=!logged;}
     document.querySelector('#sign-in').onclick=()=>{localStorage.setItem('logged','yes');document.cookie='fixtureSession=active; Max-Age=86400; path=/';history.pushState({},'', '/');render()};
     document.querySelector('#logout').onclick=()=>{localStorage.removeItem('logged');history.pushState({},'', '/sign_in');render()};
     const newChat=()=>{window.newCount++;document.querySelector('textarea').value='';document.querySelector('#messages').textContent='';};document.querySelector('#new').onclick=newChat;document.querySelector('#mobile-new').onclick=newChat;
     document.querySelector('#sidebar-toggle').onclick=()=>{const a=document.querySelector('aside');a.hidden=!a.hidden;document.querySelector('#sidebar-toggle').setAttribute('aria-label',a.hidden?'展开侧边栏':'收起侧边栏')};
-    document.querySelector('#send').onclick=()=>{let i=0;const msg=document.createElement('p');document.querySelector('#messages').append(msg);const timer=setInterval(()=>{msg.textContent+='回答片段 ';if(++i===12)clearInterval(timer)},100)};
+    document.querySelector('#send').onclick=()=>{if(window.thinkingMode!=='off'){thinkingReply();return}let i=0;const msg=document.createElement('p');document.querySelector('#messages').append(msg);const timer=setInterval(()=>{msg.textContent+='回答片段 ';if(++i===12)clearInterval(timer)},100)};
     document.querySelector('#open-dialog').onclick=()=>document.querySelector('dialog').showModal();document.querySelector('#close-dialog').onclick=()=>document.querySelector('dialog').close();render();
     </script></body></html>`);
   });

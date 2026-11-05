@@ -4,6 +4,8 @@ import { ipcRenderer } from 'electron';
 let quick = false;
 let composing = false;
 let autoCollapsed = false;
+let focusPending = false;
+const handledThinking = new WeakSet<HTMLElement>();
 let lastProbe = '';
 let probeTimer: ReturnType<typeof setTimeout> | undefined;
 const visible = (el: Element | null): el is HTMLElement => {
@@ -37,8 +39,29 @@ function collapseSidebar() {
   if (button && !isCollapsed()) { button.click(); autoCollapsed = true; }
 }
 function focusComposer() {
+  focusPending = true;
+  queueProbe();
+}
+function applyComposerFocus() {
+  if (!focusPending || document.hidden || !document.hasFocus() || document.querySelector('dialog[open], [aria-modal="true"]')) return;
   const input = composer();
-  if (input) input.focus({ preventScroll: true });
+  if (!input) return;
+  input.focus({ preventScroll: true });
+  focusPending = false;
+}
+function collapseThinking() {
+  // Use the site's own collapse control; never hide or rewrite the response.
+  const groups = new Set(document.querySelectorAll<HTMLElement>('.ds-message > [style*="--collapsible-area-title-height"]'));
+  document.querySelectorAll('.ds-think-content').forEach(el => { if (el.parentElement) groups.add(el.parentElement); });
+  for (const group of groups) {
+    if (handledThinking.has(group)) continue;
+    const header = group.firstElementChild as HTMLElement | null;
+    if (!header || !/^(?:Thinking\b|Thought\s+for\b|(?:已)?(?:深度)?思考)/i.test(label(header))) continue;
+    const control = header.matches('button, [role="button"]') ? header : header.firstElementChild as HTMLElement | null;
+    if (!control) continue;
+    handledThinking.add(group);
+    if (Array.from(group.querySelectorAll('.ds-think-content')).some(el => el.getClientRects().length > 0)) control.click();
+  }
 }
 function conversationHeight(): number {
   const input = composer();
@@ -59,6 +82,8 @@ function conversationHeight(): number {
 }
 function probe(force = false) {
   collapseSidebar();
+  collapseThinking();
+  if (focusPending) requestAnimationFrame(applyComposerFocus);
   const input = composer();
   const loginInput = Array.from(document.querySelectorAll('input[type="password"], input[autocomplete="tel"], input[autocomplete="username"]')).some(visible);
   const loginPath = /\/(?:sign_in|sign-in|login|auth)(?:\/|\?|$)/i.test(location.pathname);
@@ -71,7 +96,8 @@ function queueProbe() { if (!probeTimer) probeTimer = setTimeout(() => { probeTi
 ipcRenderer.on('wire:page-config', (_event, config: { quick: boolean; focus: boolean }) => {
   if (quick !== config.quick) { autoCollapsed = false; }
   quick = config.quick;
-  if (document.readyState !== 'loading') { probe(true); if (config.focus) focusComposer(); }
+  if (document.readyState !== 'loading') probe(true);
+  if (config.focus) focusComposer();
 });
 ipcRenderer.on('wire:page-action', (_event, action: string) => {
   if (action === 'toggle-sidebar') {
@@ -88,6 +114,10 @@ ipcRenderer.on('wire:page-action', (_event, action: string) => {
 });
 
 window.addEventListener('DOMContentLoaded', () => {
+  document.addEventListener('pointerdown', () => { focusPending = false; }, true);
+  document.addEventListener('keydown', () => { focusPending = false; }, true);
+  window.addEventListener('blur', () => { focusPending = false; });
+  window.addEventListener('focus', queueProbe);
   document.addEventListener('compositionstart', () => { composing = true; }, true);
   document.addEventListener('compositionend', () => { composing = false; }, true);
   document.addEventListener('keydown', event => {
