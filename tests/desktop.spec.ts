@@ -33,6 +33,8 @@ async function launch(name: string, existing = false) {
   await expect.poll(async () => desktop.windows().some(p => p.url().startsWith(service.url))).toBe(true);
   web = desktop.windows().find(p => p.url().startsWith(service.url))!;
   await web.waitForLoadState('domcontentloaded');
+  const authenticated = await web.evaluate(() => localStorage.getItem('logged') === 'yes');
+  await expect.poll(async () => (await state()).host).toBe(authenticated ? 'chat' : 'login');
 }
 
 async function state() { return desktop.evaluate(() => (globalThis as any).__wireTest.state()); }
@@ -42,7 +44,10 @@ async function signIn() {
   await expect.poll(async () => (await state()).host).toBe('chat');
 }
 async function settings() {
-  await shell.getByRole('button', { name: '设置', exact: true }).click();
+  const documentPath = (await state()).host === 'login' ? '/login.html' : '/shell.html';
+  await expect.poll(() => desktop.windows().some(p => p.url().endsWith(documentPath))).toBe(true);
+  const host = desktop.windows().find(p => p.url().endsWith(documentPath))!;
+  await host.getByRole('button', { name: '设置', exact: true }).click();
   await expect.poll(() => desktop.windows().some(p => /settings\.html/.test(p.url()))).toBe(true);
   return desktop.windows().find(p => /settings\.html/.test(p.url()))!;
 }
