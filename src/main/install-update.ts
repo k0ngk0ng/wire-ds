@@ -2,7 +2,7 @@ import { spawn, execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { randomUUID } from 'node:crypto';
 import { constants, openSync, closeSync, readFileSync, writeFileSync, renameSync } from 'node:fs';
-import { access, cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, appendFile, cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 const execute = promisify(execFile);
@@ -60,6 +60,7 @@ rollback() {
   exit 1
 }
 trap 'rollback replace-failed' ERR
+write_state waiting-parent ""
 for attempt in {1..600}; do kill -0 "$parent" 2>/dev/null || break; /bin/sleep 0.1; done
 if kill -0 "$parent" 2>/dev/null; then rollback parent-timeout; fi
 /bin/rm -rf "$backup"
@@ -77,7 +78,7 @@ done
 rollback restart-timeout
 `;
 
-function windowsHelper(planFile: string) {
+export function windowsHelper(planFile: string) {
   const quoted = planFile.replace(/'/g, "''");
   return `$ErrorActionPreference='Stop'
 $plan=[IO.File]::ReadAllText('${quoted}') | ConvertFrom-Json
@@ -191,7 +192,16 @@ export async function prepareUpdate(options: InstallOptions) {
           const child = spawn(command, args, { detached: true, windowsHide: true, stdio: ['ignore', log, log] });
           await new Promise<void>((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
           child.unref();
-          return child.pid!;
+          for (let attempt = 0; attempt < 600; attempt++) {
+            const status = readInstallState(options.dataDirectory);
+            if (status?.version === options.version && ['waiting-parent', 'installing', 'awaiting-restart', 'completed'].includes(status.status)) return child.pid!;
+            if (child.exitCode !== null || child.signalCode !== null || status?.status === 'failed') break;
+            await new Promise(resolve => setTimeout(resolve, 100));
+          }
+          await appendFile(path.join(directory, 'install.log'), `Helper exited before readiness: code=${child.exitCode}, signal=${child.signalCode}\n`);
+          child.kill();
+          if (staging) await rm(staging, { recursive: true, force: true });
+          throw new Error('更新辅助进程启动失败，请重试。');
         } finally { closeSync(log); }
       },
     };

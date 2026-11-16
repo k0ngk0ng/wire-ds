@@ -147,3 +147,13 @@ test('安装目录不可写时不退出或覆盖原应用', async () => {
     expect(await desktop!.evaluate(({ app }) => app.getVersion())).toBe('0.1.0');
   } finally { await chmod(parent, 0o755); }
 });
+
+test('辅助进程无法启动时保持原应用运行', async () => {
+  test.skip(platform !== 'darwin' || process.getuid?.() === 0);
+  const setupResult = await setup('helper-failure');
+  const installer = require('../dist/main/install-update.js');
+  const prepared = await installer.prepareUpdate({ ...setupResult, executablePath: setupResult.executable, dataDirectory: setupResult.data, platform, version: newVersion });
+  await chmod(path.join(setupResult.data, 'updates/install-mac.sh'), 0o000);
+  await expect(prepared.start()).rejects.toThrow(/辅助进程/);
+  expect(await desktop!.evaluate(({ app }) => app.getVersion())).toBe('0.1.0');
+});
