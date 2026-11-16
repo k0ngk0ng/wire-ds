@@ -115,7 +115,16 @@ class Desktop {
       if (process.platform === 'win32') for (const win of this.windows()) win.setTitleBarOverlay(this.overlayOptions());
       this.broadcast();
     });
-    this.main.once('ready-to-show', () => { this.show(false); completeUpdateStartup(dataDirectory, applicationVersion); });
+    let revealed = false;
+    const reveal = () => {
+      if (revealed || quitting || this.main.isDestroyed()) return;
+      revealed = true;
+      this.show(false);
+      try { completeUpdateStartup(dataDirectory, applicationVersion); } catch (error) { console.error(error); }
+    };
+    this.main.once('ready-to-show', reveal);
+    this.main.webContents.once('did-finish-load', () => setTimeout(reveal, 100));
+    if (!this.main.webContents.isLoadingMainFrame() && this.main.webContents.getURL()) setImmediate(reveal);
     void this.navigate(this.lastURL);
     if (app.isPackaged) this.updateTimer = setTimeout(() => void this.updater.check(), 5000);
   }

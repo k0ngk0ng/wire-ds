@@ -17,6 +17,19 @@ interface InstallOptions {
 }
 interface InstallState { status: string; version: string; pid?: number; workerPID?: number; reason?: string }
 const stateFile = (directory: string) => path.join(directory, 'updates/install-state.json');
+function writeAtomic(file: string, value: unknown) {
+  const temporary = `${file}.${process.pid}.tmp`;
+  for (let attempt = 0; attempt < 20; attempt++) {
+    try {
+      writeFileSync(temporary, JSON.stringify(value), { mode: 0o600 });
+      renameSync(temporary, file);
+      return;
+    } catch (error) {
+      if (process.platform !== 'win32' || !['EACCES', 'EPERM', 'EBUSY'].includes((error as NodeJS.ErrnoException).code || '') || attempt === 19) throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+    }
+  }
+}
 export function readInstallState(directory: string): InstallState | undefined {
   try { return JSON.parse(readFileSync(stateFile(directory), 'utf8')); } catch { return undefined; }
 }
@@ -27,11 +40,10 @@ function acknowledgeStartup(directory: string, version: string, complete: boolea
   const result = { ...state, status: complete ? 'completed' : state.status, pid: process.pid };
   if (complete) {
     const acknowledgement = path.join(directory, 'updates', `completed-${version}.json`);
-    writeFileSync(`${acknowledgement}.tmp`, JSON.stringify(result), { mode: 0o600 });
-    renameSync(`${acknowledgement}.tmp`, acknowledgement);
+    writeAtomic(acknowledgement, result);
+    return;
   }
-  writeFileSync(`${file}.tmp`, JSON.stringify(result), { mode: 0o600 });
-  renameSync(`${file}.tmp`, file);
+  writeAtomic(file, result);
 }
 export function beginUpdateStartup(directory: string, version: string) { acknowledgeStartup(directory, version, false); }
 export function completeUpdateStartup(directory: string, version: string) { acknowledgeStartup(directory, version, true); }
@@ -72,7 +84,7 @@ write_state awaiting-restart ""
 launch
 attempts=$((timeout / 100))
 for ((attempt=0;attempt<attempts;attempt++)); do
-  if [ -f "$acknowledgement" ]; then /bin/rmdir "$(/usr/bin/dirname "$staged")" 2>/dev/null || true; exit 0; fi
+  if [ -f "$acknowledgement" ]; then /bin/cp "$acknowledgement" "$state.tmp"; /bin/mv -f "$state.tmp" "$state"; /bin/rmdir "$(/usr/bin/dirname "$staged")" 2>/dev/null || true; exit 0; fi
   /bin/sleep 0.1
 done
 rollback restart-timeout
@@ -112,10 +124,15 @@ try {
   if($installed -notmatch ('^'+[Regex]::Escape($plan.version)+'(?:\\.0)?$')){throw 'version-mismatch'}
   Write-State 'awaiting-restart' ''
   Write-Log 'Restarting updated application'
-  $launched=Start-Process -FilePath $plan.executable -ArgumentList '--updated' -PassThru
+  $launched=Start-Process -FilePath $plan.executable -ArgumentList '--updated' -RedirectStandardOutput (Join-Path $plan.dataDirectory 'updates/app-stdout.log') -RedirectStandardError (Join-Path $plan.dataDirectory 'updates/app-stderr.log') -PassThru
   $deadline=[DateTime]::UtcNow.AddMilliseconds($plan.restartTimeout)
   while([DateTime]::UtcNow -lt $deadline){
-    if(Test-Path -LiteralPath $plan.acknowledgement){exit 0}
+    if(Test-Path -LiteralPath $plan.acknowledgement){
+      [IO.File]::WriteAllText($plan.state+'.tmp',[IO.File]::ReadAllText($plan.acknowledgement))
+      Move-Item -LiteralPath ($plan.state+'.tmp') -Destination $plan.state -Force
+      Write-Log 'completed'
+      exit 0
+    }
     Start-Sleep -Milliseconds 100
   }
   throw 'restart-timeout'

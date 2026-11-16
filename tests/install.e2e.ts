@@ -70,6 +70,8 @@ test.afterEach(async ({}, info) => {
     await info.attach('native-install-state', { body: JSON.stringify(result, null, 2), contentType: 'application/json' });
     const log = await readFile(path.join(directory, 'profile/updates/install.log'), 'utf8').catch(() => '');
     await info.attach('native-install-log', { body: log, contentType: 'text/plain' });
+    const startupErrors = await readFile(path.join(directory, 'profile/updates/app-stderr.log'), 'utf8').catch(() => '');
+    if (startupErrors) await info.attach('application-startup-errors', { body: startupErrors, contentType: 'text/plain' });
     if (platform === 'win32' && helperPID) {
       const processes = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -eq ${helperPID} -or $_.ParentProcessId -eq ${helperPID} } | Select-Object Name,ProcessId,ParentProcessId,ExecutablePath,CommandLine | ConvertTo-Json -Compress`], { encoding: 'utf8', timeout: 15_000 });
       await info.attach('native-update-processes', { body: processes, contentType: 'text/plain' });
