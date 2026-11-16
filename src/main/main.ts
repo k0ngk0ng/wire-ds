@@ -4,6 +4,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { SettingsStore, sanitizeSettings } from './settings';
 import { ReleaseUpdater } from './updates';
+import { prepareUpdate, beginUpdateStartup, completeUpdateStartup } from './install-update';
 import type { AppState, Result, Settings, WindowMode, SavedBounds } from '../shared';
 
 const projectRoot = path.resolve(__dirname, '../..');
@@ -59,21 +60,24 @@ class Desktop {
   private reducedMotion = false;
   private manualResizing = false;
   private heightFrame?: NodeJS.Timeout;
-  private shrinkTimer?: NodeJS.Timeout;
-  private shrinkTarget?: number;
   private heightAnimation?: { x: number; y: number; width: number; height: number; nativeHeight: number; target: number; velocity: number; time: number };
   private webSession = session.fromPartition('persist:deepseek');
   private updateTimer?: NodeJS.Timeout;
-  private openedInstaller = '';
-  private failInstallerOpen = false;
+  private installedUpdate = '';
+  private failUpdateInstall = false;
   private updater = new ReleaseUpdater({
     version: applicationVersion, platform: process.platform, arch: process.arch, directory: path.join(dataDirectory, 'updates'),
     endpoint: testing ? process.env.WIRE_DS_TEST_UPDATE_URL : undefined,
     onChange: () => this.broadcast(),
-    openInstaller: async file => {
-      if (!testing) return shell.openPath(file);
-      if (this.failInstallerOpen) return 'Test installer could not open';
-      this.openedInstaller = file; return '';
+    installUpdate: async (file, version) => {
+      if (testing) {
+        if (this.failUpdateInstall) throw new Error('无法安装更新，请重试。');
+        this.installedUpdate = file; return;
+      }
+      if (!app.isPackaged) throw new Error('更新自动安装需要使用已安装的应用。');
+      const prepared = await prepareUpdate({ archive: file, executablePath: process.execPath, dataDirectory, platform: process.platform, version, parentPID: process.pid });
+      await prepared.start();
+      setImmediate(() => app.quit());
     },
   });
 
@@ -111,7 +115,7 @@ class Desktop {
       if (process.platform === 'win32') for (const win of this.windows()) win.setTitleBarOverlay(this.overlayOptions());
       this.broadcast();
     });
-    this.main.once('ready-to-show', () => this.show(false));
+    this.main.once('ready-to-show', () => { this.show(false); completeUpdateStartup(dataDirectory, applicationVersion); });
     void this.navigate(this.lastURL);
     if (app.isPackaged) this.updateTimer = setTimeout(() => void this.updater.check(), 5000);
   }
@@ -322,14 +326,14 @@ class Desktop {
   }
 
   private cancelHeightAdjustment() {
-    clearTimeout(this.heightFrame); clearTimeout(this.shrinkTimer);
-    this.heightFrame = undefined; this.shrinkTimer = undefined; this.shrinkTarget = undefined; this.heightAnimation = undefined;
+    clearTimeout(this.heightFrame);
+    this.heightFrame = undefined; this.heightAnimation = undefined;
   }
 
   private animateQuickHeight(height: number) {
     if (!this.canAdjustQuickHeight()) { this.cancelHeightAdjustment(); return; }
     const current = this.main.getBounds();
-    if (this.reducedMotion) {
+    if (this.reducedMotion || height <= current.height) {
       this.cancelHeightAdjustment();
       this.resizing = true;
       this.main.setBounds({ ...current, height });
@@ -380,13 +384,6 @@ class Desktop {
     const area = screen.getDisplayMatching(current).workArea;
     const maximum = Math.max(360, Math.min(Math.floor(area.height * this.store.value.quickMaxHeightRatio), area.y + area.height - current.y));
     const height = Math.min(maximum, Math.max(360, Math.ceil(this.contentHeight)));
-    if (!this.reducedMotion && height < (this.heightAnimation?.target ?? current.height) - 2) {
-      if (this.shrinkTarget === height) return;
-      clearTimeout(this.shrinkTimer); this.shrinkTarget = height;
-      this.shrinkTimer = setTimeout(() => { this.shrinkTimer = undefined; this.shrinkTarget = undefined; this.animateQuickHeight(height); }, 180);
-      return;
-    }
-    clearTimeout(this.shrinkTimer); this.shrinkTimer = undefined; this.shrinkTarget = undefined;
     this.animateQuickHeight(height);
   }
 
@@ -516,6 +513,7 @@ class Desktop {
       case 'check-update': this.openSettings(); return this.updater.check();
       case 'download-update': return this.updater.download();
       case 'install-update': return this.updater.install();
+      case 'apply-update': return this.updater.update();
       case 'quit': app.quit(); break;
       default: return { ok: false, message: '未知操作。' };
     }
@@ -524,7 +522,7 @@ class Desktop {
 
   openSettings() {
     if (this.preferences && !this.preferences.isDestroyed()) { this.preferences.show(); this.preferences.focus(); return; }
-    this.preferences = new BrowserWindow({ width: 640, height: 740, minWidth: 540, minHeight: 580, show: false, resizable: true,
+    this.preferences = new BrowserWindow({ ...this.fittedBounds({ width: 640, height: 740 }), show: false, resizable: false, maximizable: false, fullscreenable: false, minimizable: false,
       title: 'ChatDeepSeek 设置', titleBarStyle: process.platform === 'win32' ? 'hidden' : 'hiddenInset', trafficLightPosition: { x: 17, y: 20 },
       ...(process.platform === 'win32' ? { titleBarOverlay: this.overlayOptions() } : {}),
       backgroundColor: nativeTheme.shouldUseDarkColors ? '#15171b' : '#f7f8fb',
@@ -595,7 +593,7 @@ class Desktop {
 
   testAPI() {
     return {
-      state: () => ({ ...this.state(), visible: this.owner().isVisible(), alwaysOnTop: this.main.isAlwaysOnTop(), pageId: this.view.webContents.id, bounds: this.main.getBounds(), focused: this.owner().isFocused(), openedInstaller: this.openedInstaller }),
+      state: () => ({ ...this.state(), visible: this.owner().isVisible(), alwaysOnTop: this.main.isAlwaysOnTop(), pageId: this.view.webContents.id, bounds: this.main.getBounds(), focused: this.owner().isFocused(), installedUpdate: this.installedUpdate }),
       action: async (name: string, value?: unknown) => {
         if (name === 'shortcut') { this.shortcut(); return; }
         if (name === 'close') { this.main.close(); return; }
@@ -603,7 +601,7 @@ class Desktop {
         if (name === 'hide') { this.hide(); return; }
         if (name === 'navigate') { await this.navigate(value as string); return; }
         if (name === 'occupyShortcut') { return globalShortcut.register(value as string, () => {}); }
-        if (name === 'failInstallerOpen') { this.failInstallerOpen = true; return; }
+        if (name === 'failUpdateInstall') { this.failUpdateInstall = true; return; }
         return this.action(name);
       },
       untrustedIPC: () => this.trusted({ sender: this.view.webContents, senderFrame: this.view.webContents.mainFrame } as IpcMainInvokeEvent),
@@ -613,6 +611,7 @@ class Desktop {
 
 if (hasLock) {
   app.whenReady().then(() => {
+    beginUpdateStartup(dataDirectory, applicationVersion);
     const trayIcon = nativeImage.createFromPath(path.join(projectRoot, process.platform === 'darwin' ? 'assets/trayTemplate.png' : 'assets/icon.png')).resize({ width: process.platform === 'darwin' ? 18 : 20, height: process.platform === 'darwin' ? 18 : 20 });
     if (!trayIcon.isEmpty()) { if (process.platform === 'darwin') trayIcon.setTemplateImage(true); tray = new Tray(trayIcon); tray.setToolTip('ChatDeepSeek'); }
     controller = new Desktop();

@@ -4,6 +4,7 @@ import { createReadStream } from 'node:fs';
 import { mkdir, open, rename, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import type { Result, UpdateState } from '../shared';
+import { readInstallState } from './install-update';
 
 interface UpdateOptions {
   version: string;
@@ -12,7 +13,7 @@ interface UpdateOptions {
   directory: string;
   endpoint?: string;
   onChange: () => void;
-  openInstaller: (file: string) => Promise<string>;
+  installUpdate: (file: string, version: string) => Promise<void>;
 }
 interface ReleaseAsset { name: string; browser_download_url: string; digest: string; size: number }
 
@@ -31,11 +32,14 @@ export class ReleaseUpdater {
   private controller?: AbortController;
   private pending?: Promise<Result>;
 
-  constructor(private options: UpdateOptions) {}
+  constructor(private options: UpdateOptions) {
+    const result = readInstallState(path.dirname(options.directory));
+    if (result?.status === 'failed') this.state = { status: 'error', version: '', progress: 0, message: '更新未完成，已保留或恢复原应用。请重新检查更新。' };
+  }
 
   private publish(state: UpdateState) { this.state = state; this.options.onChange(); }
   private error(error: unknown) {
-    const message = error instanceof Error && /^(更新|GitHub|下载|安装包|无法打开)/.test(error.message)
+    const message = error instanceof Error && /^(更新|GitHub|下载|安装包|无法安装)/.test(error.message)
       ? error.message : '更新失败，请检查网络或磁盘空间后重试。';
     this.publish({ ...this.state, status: 'error', progress: 0, message });
     return { ok: false, message };
@@ -56,6 +60,7 @@ export class ReleaseUpdater {
     return response;
   }
   check(): Promise<Result> {
+    if (this.state.status === 'installing') return Promise.resolve({ ok: false, message: '正在安装更新。' });
     return this.run(async () => {
       this.target = undefined;
       this.publish({ status: 'checking', version: '', progress: 0, message: '正在检查更新…' });
@@ -69,7 +74,7 @@ export class ReleaseUpdater {
           this.publish({ status: 'current', version: this.options.version, progress: 0, message: '已是最新稳定版本' });
           return { ok: true };
         }
-        const extension = this.options.platform === 'darwin' ? 'dmg' : this.options.platform === 'win32' ? 'exe' : '';
+        const extension = this.options.platform === 'darwin' ? 'zip' : this.options.platform === 'win32' ? 'exe' : '';
         if (!extension || !['arm64', 'x64'].includes(this.options.arch)) throw new Error('更新暂不支持此系统或架构，请查看 GitHub Releases。');
         const name = `ChatDeepSeek-${version}-${this.options.arch}.${extension}`;
         const asset = release.assets.find(value => value && typeof value === 'object' && value.name === name) as ReleaseAsset | undefined;
@@ -127,12 +132,16 @@ export class ReleaseUpdater {
         const hash = createHash('sha256');
         for await (const chunk of createReadStream(file)) hash.update(chunk);
         if (hash.digest('hex') !== target.digest.slice(7).toLowerCase()) throw new Error('安装包校验失败，请重新检查更新并下载。');
-        const error = await this.options.openInstaller(file);
-        if (error) throw new Error('无法打开安装包，请重新下载或前往 GitHub Releases 安装。');
-        this.publish({ ...this.state, message: '安装包已打开。请退出应用后完成安装，再重新启动。' });
+        this.publish({ ...this.state, status: 'installing', message: '正在安装更新，应用即将自动重启…' });
+        await this.options.installUpdate(file, this.state.version);
         return { ok: true };
       } catch (error) { return this.error(error); }
     });
+  }
+  async update(): Promise<Result> {
+    if (this.state.status === 'installing') return { ok: true };
+    const result = this.state.status === 'ready' ? { ok: true } : await this.download();
+    return result.ok ? this.install() : result;
   }
   async stop() { this.controller?.abort(); await this.pending; }
 }

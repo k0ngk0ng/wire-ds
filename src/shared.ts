@@ -1,7 +1,7 @@
 export type WindowMode = 'quick' | 'full';
 export type Theme = 'system' | 'light' | 'dark';
 export interface UpdateState {
-  status: 'idle' | 'checking' | 'current' | 'available' | 'downloading' | 'ready' | 'error';
+  status: 'idle' | 'checking' | 'current' | 'available' | 'downloading' | 'ready' | 'installing' | 'error';
   version: string;
   progress: number;
   message: string;

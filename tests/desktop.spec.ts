@@ -376,6 +376,23 @@ test('快捷窗口从 360 高度随对话长高，到屏幕上限后滚动，新
   await expect.poll(async () => (await state()).bounds.height).toBe(360);
 });
 
+test('设置标题栏不随内容滚动，窗口不可调整大小、最大化或全屏', async ({}, info) => {
+  await launch('settings-window-layout'); await signIn();
+  const prefs = await settings();
+  const titlebar = prefs.locator('.settings-titlebar');
+  const before = await titlebar.boundingBox();
+  await prefs.locator('.settings-content').evaluate(el => { el.scrollTop = el.scrollHeight; });
+  expect(await prefs.locator('.settings-content').evaluate(el => el.scrollTop)).toBeGreaterThan(0);
+  expect(await prefs.evaluate(() => window.scrollY)).toBe(0);
+  expect(await titlebar.boundingBox()).toEqual(before);
+  expect(await titlebar.evaluate(el => getComputedStyle(el).getPropertyValue('-webkit-app-region'))).toBe('drag');
+  expect(await desktop.evaluate(({ BrowserWindow }) => {
+    const prefs = BrowserWindow.getAllWindows().find(window => /\/settings\.html$/.test(window.webContents.getURL()))!;
+    return { resizable: prefs.isResizable(), maximizable: prefs.isMaximizable(), fullscreenable: prefs.isFullScreenable() };
+  })).toEqual({ resizable: false, maximizable: false, fullscreenable: false });
+  await prefs.screenshot({ path: info.outputPath('settings-scrolled.png') });
+});
+
 async function recordBounds(position: 'top' | 'bottom' = 'top') {
   return desktop.evaluate(({ BrowserWindow, screen }, position) => {
     const window = BrowserWindow.getAllWindows().find(window => /\/shell\.html$/.test(window.webContents.getURL()))!;
@@ -443,8 +460,12 @@ test('流式目标持续增长和虚拟列表回收时不来回缩放，新对�
   const frames = await boundsFrames();
   await info.attach('native-window-stream', { body: JSON.stringify(frames, null, 2), contentType: 'application/json' });
   expect(frames.every((frame, index) => !index || frame.height >= frames[index - 1].height)).toBe(true);
+  await desktop.evaluate(() => { (globalThis as any).__boundsFrames.length = 0; });
   await shell.getByRole('button', { name: '新对话', exact: true }).click();
   await expect.poll(async () => (await state()).bounds.height).toBe(360);
+  const reset = await boundsFrames();
+  await info.attach('native-window-instant-reset', { body: JSON.stringify(reset, null, 2), contentType: 'application/json' });
+  expect(reset.every(frame => frame.height === 360)).toBe(true);
 });
 
 test('切换完整模式、关闭自动高度或隐藏窗口时终止扩展动画', async () => {
@@ -586,23 +607,22 @@ test('呼出后用户选择其他输入框或打开网页弹层时尊重焦点�
   await expect(input).not.toBeFocused();
 });
 
-test('从 GitHub Release 检查更新，匹配平台下载并校验后交给系统安装', async () => {
+test('点击一次更新即可下载、校验并安排自动安装重启', async () => {
   await launch('updates-download'); await signIn();
   expect((await state()).version).toBe(JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')).version);
   const prefs = await settings();
   await prefs.getByRole('button', { name: '检查更新', exact: true }).click();
   await expect(prefs.locator('#update-status')).toContainText('9.10.0');
   expect(await desktop.evaluate(({ Menu }) => Menu.getApplicationMenu()!.items.some(item => item.submenu?.items.some(child => child.label === '检查更新…')))).toBe(true);
-  await prefs.getByRole('button', { name: '下载更新', exact: true }).click();
+  await prefs.getByRole('button', { name: '更新并重启', exact: true }).click();
   await expect(prefs.getByRole('progressbar', { name: '更新下载进度' })).toBeVisible();
-  await expect(prefs.getByRole('button', { name: '打开安装包', exact: true })).toBeVisible();
-  const extension = process.platform === 'darwin' ? 'dmg' : 'exe';
+  await expect.poll(async () => (await state()).update.status).toBe('installing');
+  const extension = process.platform === 'darwin' ? 'zip' : 'exe';
   const name = `ChatDeepSeek-9.10.0-${process.arch}.${extension}`;
   expect(releases.state().downloads).toEqual([`/releases/download/v9.10.0/${name}`]);
   expect(await readFile(path.join(dataDir, 'updates', name))).toEqual(releases.installer);
-  await prefs.getByRole('button', { name: '打开安装包', exact: true }).click();
-  await expect.poll(async () => (await state()).openedInstaller).toBe(path.join(dataDir, 'updates', name));
-  await expect(prefs.locator('#update-status')).toContainText('安装包已打开');
+  await expect.poll(async () => (await state()).installedUpdate).toBe(path.join(dataDir, 'updates', name));
+  await expect(prefs.locator('#update-status')).toContainText('重启');
   expect(await web.evaluate(() => localStorage.getItem('logged'))).toBe('yes');
 });
 
@@ -613,7 +633,7 @@ test('更新检查忽略旧版本、当前版本、草稿和预发行版本', as
     releases.setMode(mode);
     await prefs.getByRole('button', { name: '检查更新', exact: true }).click();
     await expect(prefs.locator('#update-status')).toContainText('已是最新稳定版本');
-    await expect(prefs.getByRole('button', { name: '下载更新', exact: true })).toBeHidden();
+    await expect(prefs.getByRole('button', { name: '更新并重启', exact: true })).toBeHidden();
   }
   expect(releases.state().downloads).toEqual([]);
 });
@@ -626,7 +646,7 @@ test('更新检查拒绝无效版本、损坏元数据、缺失平台安装包�
     await prefs.getByRole('button', { name: '检查更新', exact: true }).click();
     await expect.poll(async () => (await state()).update.status).toBe('error');
     await expect(prefs.locator('#update-status')).not.toBeEmpty();
-    await expect(prefs.getByRole('button', { name: '下载更新', exact: true })).toBeHidden();
+    await expect(prefs.getByRole('button', { name: '更新并重启', exact: true })).toBeHidden();
   }
   expect(releases.state().downloads).toEqual([]);
 });
@@ -644,7 +664,7 @@ test('更新网络故障和限流可重试，重复操作只发送一次请求',
   await expect(prefs.locator('#update-status')).toContainText('9.10.0');
   expect(releases.state().checks).toBe(1);
   await prefs.evaluate(() => { const button = document.querySelector<HTMLButtonElement>('#update-action')!; button.click(); button.click(); });
-  await expect(prefs.getByRole('button', { name: '打开安装包', exact: true })).toBeVisible();
+  await expect.poll(async () => (await state()).update.status).toBe('installing');
   expect(releases.state().downloads).toHaveLength(1);
 });
 
@@ -654,36 +674,35 @@ test('更新下载失败、中断或校验不匹配时清理文件，重试后�
   for (const mode of ['download-error', 'interrupted', 'corrupted']) {
     releases.setMode(mode);
     await prefs.getByRole('button', { name: '检查更新', exact: true }).click();
-    await expect(prefs.getByRole('button', { name: '下载更新', exact: true })).toBeVisible();
-    await prefs.getByRole('button', { name: '下载更新', exact: true }).click();
+    await expect(prefs.getByRole('button', { name: '更新并重启', exact: true })).toBeVisible();
+    await prefs.getByRole('button', { name: '更新并重启', exact: true }).click();
     await expect.poll(async () => (await state()).update.status).toBe('error');
     expect(await readdir(path.join(dataDir, 'updates'))).toEqual([]);
-    expect((await state()).openedInstaller).toBe('');
+    expect((await state()).installedUpdate).toBe('');
   }
   releases.setMode('available');
   await prefs.getByRole('button', { name: '检查更新', exact: true }).click();
-  await expect(prefs.getByRole('button', { name: '下载更新', exact: true })).toBeVisible();
-  await prefs.getByRole('button', { name: '下载更新', exact: true }).click();
-  await expect(prefs.getByRole('button', { name: '打开安装包', exact: true })).toBeVisible();
+  await expect(prefs.getByRole('button', { name: '更新并重启', exact: true })).toBeVisible();
+  await prefs.getByRole('button', { name: '更新并重启', exact: true }).click();
+  await expect.poll(async () => (await state()).update.status).toBe('installing');
 });
 
-test('打开更新安装包前重新校验，文件被修改或系统拒绝时不报告安装成功', async () => {
+test('安装更新前重新校验，文件被修改或准备安装失败时不退出应用', async () => {
   await launch('updates-open-validation');
   const prefs = await settings();
   await prefs.getByRole('button', { name: '检查更新', exact: true }).click();
-  await expect(prefs.getByRole('button', { name: '下载更新', exact: true })).toBeVisible();
-  await prefs.getByRole('button', { name: '下载更新', exact: true }).click();
-  await expect(prefs.getByRole('button', { name: '打开安装包', exact: true })).toBeVisible();
+  await expect(prefs.getByRole('button', { name: '更新并重启', exact: true })).toBeVisible();
+  await action('download-update');
+  await expect.poll(async () => (await state()).update.status).toBe('ready');
   const [file] = await readdir(path.join(dataDir, 'updates'));
   await writeFile(path.join(dataDir, 'updates', file), 'modified installer');
-  await prefs.getByRole('button', { name: '打开安装包', exact: true }).click();
+  await action('install-update');
   await expect.poll(async () => (await state()).update.status).toBe('error');
-  expect((await state()).openedInstaller).toBe('');
+  expect((await state()).installedUpdate).toBe('');
   await prefs.getByRole('button', { name: '检查更新', exact: true }).click();
-  await expect(prefs.getByRole('button', { name: '下载更新', exact: true })).toBeVisible();
-  await prefs.getByRole('button', { name: '下载更新', exact: true }).click();
-  await expect(prefs.getByRole('button', { name: '打开安装包', exact: true })).toBeVisible();
-  await action('failInstallerOpen');
-  await prefs.getByRole('button', { name: '打开安装包', exact: true }).click();
-  await expect(prefs.locator('#update-status')).toContainText('无法打开安装包');
+  await expect(prefs.getByRole('button', { name: '更新并重启', exact: true })).toBeVisible();
+  await action('failUpdateInstall');
+  await prefs.getByRole('button', { name: '更新并重启', exact: true }).click();
+  await expect(prefs.locator('#update-status')).toContainText('无法安装更新');
+  expect((await state()).visible).toBe(true);
 });

@@ -54,6 +54,9 @@ jobs:
       - name: Verify macOS signature
         if: matrix.platform == 'mac'
         run: codesign --verify --deep --strict "release/mac${{ matrix.arch == 'arm64' && '-arm64' || '' }}/ChatDeepSeek.app"
+      - name: Native update installation E2E
+        if: matrix.arch == 'arm64' || matrix.platform == 'win'
+        run: npm run test:install
       - name: Upload installers
         uses: actions/upload-artifact@v4
         with:
@@ -73,6 +76,8 @@ jobs:
             playwright-report/
             test-results/
             artifacts/e2e-results.json
+            artifacts/install-report/
+            artifacts/install-results.json
 
   release:
     name: Publish tagged installers

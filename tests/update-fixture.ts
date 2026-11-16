@@ -14,7 +14,7 @@ export async function startUpdateFixture(currentVersion: string) {
       if (mode === 'offline' || mode === 'limited') { res.writeHead(mode === 'limited' ? 403 : 503); res.end(); return; }
       if (mode === 'invalid-json') { res.end('{invalid'); return; }
       const version = mode === 'current' ? currentVersion : mode === 'older' ? '0.9.9' : '9.10.0';
-      const assets = [['arm64', 'dmg'], ['x64', 'dmg'], ['x64', 'exe']].map(([arch, extension]) => {
+      const assets = [['arm64', 'zip'], ['x64', 'zip'], ['x64', 'exe']].map(([arch, extension]) => {
         const name = `ChatDeepSeek-${version}-${arch}.${extension}`;
         return { name, browser_download_url: `${mode === 'untrusted' ? 'https://example.com' : url}/releases/download/v${version}/${name}`, size: installer.length, digest: mode === 'missing-digest' ? null : mode === 'corrupted' ? `sha256:${'0'.repeat(64)}` : digest };
       });
