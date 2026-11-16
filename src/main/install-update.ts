@@ -89,17 +89,30 @@ function Write-State($status,$reason) {
   Move-Item -LiteralPath ($plan.state+'.tmp') -Destination $plan.state -Force
 }
 try {
+  Write-State 'waiting-parent' ''
+  [Console]::WriteLine('Waiting for previous process '+$plan.parentPID)
+  [Console]::Out.Flush()
   $deadline=[DateTime]::UtcNow.AddSeconds(60)
   while(Get-Process -Id $plan.parentPID -ErrorAction SilentlyContinue){if([DateTime]::UtcNow -gt $deadline){throw 'parent-timeout'};Start-Sleep -Milliseconds 100}
   $env:WIRE_DS_DATA_DIR=$plan.dataDirectory
   $env:TEMP=$plan.temporary
   $env:TMP=$plan.temporary
   $attempted=$true
-  $installer=Start-Process -FilePath $plan.archive -ArgumentList ('/S --updated /D='+$plan.target) -Wait -PassThru
+  Write-State 'installing' ''
+  [Console]::WriteLine('Starting silent installer')
+  [Console]::Out.Flush()
+  $installer=Start-Process -FilePath $plan.archive -ArgumentList ('/S --updated /D='+$plan.target) -PassThru
+  $null=$installer.Handle
+  if(-not $installer.WaitForExit(120000)){Stop-Process -Id $installer.Id -Force -ErrorAction SilentlyContinue;throw 'installer-timeout'}
+  $installer.Refresh()
+  [Console]::WriteLine('Installer exited with '+$installer.ExitCode)
+  [Console]::Out.Flush()
   if($installer.ExitCode -ne 0){throw 'installer-failed'}
   $installed=[Diagnostics.FileVersionInfo]::GetVersionInfo($plan.executable).ProductVersion
   if($installed -notmatch ('^'+[Regex]::Escape($plan.version)+'(?:\\.0)?$')){throw 'version-mismatch'}
   Write-State 'awaiting-restart' ''
+  [Console]::WriteLine('Restarting updated application')
+  [Console]::Out.Flush()
   $launched=Start-Process -FilePath $plan.executable -ArgumentList '--updated' -PassThru
   $deadline=[DateTime]::UtcNow.AddMilliseconds($plan.restartTimeout)
   while([DateTime]::UtcNow -lt $deadline){

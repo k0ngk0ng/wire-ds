@@ -6,6 +6,11 @@ on:
     tags: ['v*']
   pull_request:
   workflow_dispatch:
+    inputs:
+      windows_native_only:
+        description: Verify only Windows native update installation
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -20,16 +25,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: macos-latest
-            platform: mac
-            arch: arm64
-          - os: macos-latest
-            platform: mac
-            arch: x64
-          - os: windows-latest
-            platform: win
-            arch: x64
+        include: ${{ fromJSON(inputs.windows_native_only && '[{"os":"windows-latest","platform":"win","arch":"x64"}]' || '[{"os":"macos-latest","platform":"mac","arch":"arm64"},{"os":"macos-latest","platform":"mac","arch":"x64"},{"os":"windows-latest","platform":"win","arch":"x64"}]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     env:
@@ -47,7 +43,7 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - name: Desktop E2E
-        if: matrix.arch == 'arm64' || matrix.platform == 'win'
+        if: (matrix.arch == 'arm64' || matrix.platform == 'win') && !inputs.windows_native_only
         run: npm run test:e2e
       - name: Package application
         run: npm run build && node scripts/package.mjs --${{ matrix.platform }} --${{ matrix.arch }}

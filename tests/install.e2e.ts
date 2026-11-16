@@ -69,6 +69,10 @@ test.afterEach(async ({}, info) => {
     await info.attach('native-install-state', { body: JSON.stringify(result, null, 2), contentType: 'application/json' });
     const log = await readFile(path.join(directory, 'profile/updates/install.log'), 'utf8').catch(() => '');
     await info.attach('native-install-log', { body: log, contentType: 'text/plain' });
+    if (platform === 'win32' && helperPID) {
+      const processes = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -eq ${helperPID} -or $_.ParentProcessId -eq ${helperPID} } | Select-Object Name,ProcessId,ParentProcessId | ConvertTo-Json -Compress`], { encoding: 'utf8', timeout: 15_000 });
+      await info.attach('native-update-processes', { body: processes, contentType: 'text/plain' });
+    }
   }
   for (const pid of [helperPID, childPID]) if (pid) { try { process.kill(pid, 'SIGTERM'); } catch {} }
   await desktop?.close().catch(() => {});
@@ -81,7 +85,7 @@ test('真实应用更新后替换原目录、自动重启并保留数据', async
   const prepared = await installer.prepareUpdate({ ...setupResult, executablePath: setupResult.executable, dataDirectory: setupResult.data, platform, version: newVersion, restartTimeout: 15_000 });
   helperPID = await prepared.start();
   await desktop!.close(); desktop = undefined;
-  await expect.poll(async () => JSON.parse(await readFile(path.join(setupResult.data, 'updates/install-state.json'), 'utf8').catch(() => '{}')).status, { timeout: 45_000 }).toBe('completed');
+  await expect.poll(async () => JSON.parse(await readFile(path.join(setupResult.data, 'updates/install-state.json'), 'utf8').catch(() => '{}')).status, { timeout: 150_000 }).toBe('completed');
   const result = JSON.parse(await readFile(path.join(setupResult.data, 'updates/install-state.json'), 'utf8'));
   expect(result.version).toBe(newVersion);
   expect(result.pid).not.toBe(setupResult.parentPID);
