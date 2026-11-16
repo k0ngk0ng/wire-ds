@@ -10,6 +10,14 @@
 
 如需更新，先从菜单栏退出应用，再运行新 DMG 中的同一脚本。旧版本保留为带日期的备份；登录数据和设置位于 `~/Library/Application Support/Wire DeepSeek`，更新时保留。
 
+安装脚本默认写入 `~/Applications`。如果现有应用位于 `/Applications`，需指定同一目录：
+
+```sh
+bash "/Volumes/ChatDeepSeek/安装到本机.command" --target /Applications
+```
+
+若 DMG 挂载目录带有数字后缀，使用实际目录替换命令中的 `/Volumes/ChatDeepSeek`。从 v1.0.2 开始，可从设置或菜单中的「检查更新」下载并校验最新安装包，再按上述步骤覆盖安装。
+
 也可以手动拖入 Applications 后，在终端仅对这个应用执行：
 
 ```sh

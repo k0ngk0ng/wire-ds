@@ -8,6 +8,7 @@ let focusPending = false;
 const handledThinking = new WeakSet<HTMLElement>();
 let lastProbe = '';
 let probeTimer: ReturnType<typeof setTimeout> | undefined;
+let newChatTimer: ReturnType<typeof setTimeout> | undefined;
 const visible = (el: Element | null): el is HTMLElement => {
   if (!el || !el.getClientRects().length || getComputedStyle(el).visibility === 'hidden') return false;
   const rect = el.getBoundingClientRect();
@@ -21,6 +22,46 @@ const buttons = () => Array.from(document.querySelectorAll<HTMLElement>('button,
 const hasIcon = (el: Element, prefixes: string[]) => Array.from(el.querySelectorAll('svg path')).some(p => prefixes.some(prefix => (p.getAttribute('d') || '').startsWith(prefix)));
 const sidebarIcons = ['M9.67272 0.522841', 'M17.2027 4.90034'];
 const newChatIcons = ['M8 0.599609', 'M9.99994 1.22943'];
+const newChatName = /^(?:(?:开启|新建|创建|开始)(?:新)?(?:对话|聊天)|新(?:对话|聊天)|new (?:chat|conversation)|(?:start|create|open)(?: a)? new (?:chat|conversation))(?:\s*(?:[（(].*[)）]|(?:⌘|Ctrl|Control|Command).*))?$/i;
+function newChatLabels(el: HTMLElement) {
+  const references = ['aria-labelledby', 'aria-describedby'].map(name => (el.getAttribute(name) || '').split(/\s+/).map(id => document.getElementById(id)?.textContent || '').join(' '));
+  return [...['aria-label', 'title', 'data-tooltip-content', 'data-tooltip', 'data-label'].map(name => el.getAttribute(name)), ...references, el.textContent]
+    .filter((value): value is string => !!value).map(value => value.replace(/\s+/g, ' ').trim());
+}
+function newChatButton() {
+  const controls = buttons().filter(el => {
+    if (el.closest('[inert], [aria-disabled="true"], .ds-message, [data-message-id], [data-role="message"], #messages') || el.matches(':disabled, [disabled]')) return false;
+    if (!el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }) || el.querySelector('button, [role="button"], a[href], [tabindex="0"]')) return false;
+    const href = el.getAttribute('href');
+    if (href !== null) {
+      try { if (new URL(href, location.href).origin !== location.origin) return false; } catch { return false; }
+    }
+    return true;
+  });
+  return controls.find(el => newChatLabels(el).some(value => newChatName.test(value)))
+    || controls.find(el => ['data-testid', 'data-test-id', 'data-action', 'id'].some(name => /^(?:new|create)[-_](?:chat|conversation)(?:[-_]button)?$/i.test(el.getAttribute(name) || '')))
+    || controls.find(el => {
+      const href = el.getAttribute('href');
+      if (!href) return false;
+      const target = new URL(href, location.href);
+      return target.pathname === '/' && !target.search && !target.hash;
+    })
+    || controls.find(el => hasIcon(el, newChatIcons));
+}
+function startNewChat() {
+  clearTimeout(newChatTimer);
+  if (!composer()) return;
+  const previousURL = location.href;
+  const fallback = () => {
+    if (location.href === previousURL && location.pathname !== '/') location.assign(new URL('/', location.origin).href);
+  };
+  const button = newChatButton();
+  if (button) {
+    button.click();
+    newChatTimer = setTimeout(fallback, 1000);
+  } else fallback();
+  setTimeout(focusComposer, 150);
+}
 function sidebarButton() {
   return buttons().find(el => /^(?:收起侧边栏|展开侧边栏|折叠侧边栏|打开侧边栏|关闭侧边栏|Toggle sidebar|Collapse sidebar|Expand sidebar)/i.test(label(el)))
     || buttons().find(el => /sidebar|侧边栏/i.test(el.getAttribute('aria-label') || el.getAttribute('title') || ''))
@@ -105,12 +146,7 @@ ipcRenderer.on('wire:page-action', (_event, action: string) => {
     if (button) { autoCollapsed = true; button.click(); setTimeout(probe, 100); }
     else ipcRenderer.send('wire:page-notice', '未找到官网侧边栏按钮，可展开窗口后使用网页中的侧边栏。');
   }
-  if (action === 'new-chat') {
-    const button = buttons().find(el => /^(?:开启新对话|新建对话|新对话|New chat|Start new chat)(?:\s|$)/i.test(label(el)))
-      || buttons().find(el => hasIcon(el, newChatIcons));
-    if (button) { button.click(); setTimeout(focusComposer, 150); }
-    else ipcRenderer.send('wire:page-notice', '未找到官网新对话按钮，请使用网页中的新对话入口。');
-  }
+  if (action === 'new-chat') startNewChat();
 });
 
 window.addEventListener('DOMContentLoaded', () => {

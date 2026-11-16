@@ -1,11 +1,13 @@
 import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
-import { mkdir, readFile, writeFile, rm } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, rm, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { startFixture } from './fixture';
+import { startUpdateFixture } from './update-fixture';
 
 const root = path.resolve(__dirname, '..');
 let service: Awaited<ReturnType<typeof startFixture>>;
+let releases: Awaited<ReturnType<typeof startUpdateFixture>>;
 let desktop: ElectronApplication;
 let shell: Page;
 let web: Page;
@@ -20,7 +22,7 @@ async function launch(name: string, existing = false) {
     colorScheme: null,
     chromiumSandbox: true,
     artifactsDir: path.join(root, 'artifacts', 'electron'),
-    env: { ...process.env, WIRE_DS_TEST: '1', WIRE_DS_TEST_URL: service.url, WIRE_DS_DATA_DIR: dataDir, WIRE_DS_TEST_SHORTCUT: 'F6', TMPDIR: path.join(root, '.cache/tmp') },
+    env: { ...process.env, WIRE_DS_TEST: '1', WIRE_DS_TEST_URL: service.url, WIRE_DS_TEST_UPDATE_URL: `${releases.url}/latest`, WIRE_DS_DATA_DIR: dataDir, WIRE_DS_TEST_SHORTCUT: 'F6', TMPDIR: path.join(root, '.cache/tmp') },
     timeout: 30_000,
   });
   // BrowserWindow and WebContentsView targets can arrive in different orders on CI.
@@ -45,8 +47,9 @@ async function settings() {
   return desktop.windows().find(p => /settings\.html/.test(p.url()))!;
 }
 
-test.beforeAll(async () => { service = await startFixture(); await mkdir(path.join(root, '.cache/tmp'), { recursive: true }); });
-test.afterAll(async () => { await service.close(); });
+test.beforeAll(async () => { service = await startFixture(); releases = await startUpdateFixture(JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')).version); await mkdir(path.join(root, '.cache/tmp'), { recursive: true }); });
+test.beforeEach(() => releases.reset());
+test.afterAll(async () => { await service.close(); await releases.close(); });
 test.afterEach(async ({}, info) => {
   if (desktop) {
     await info.attach('desktop-state', { body: JSON.stringify(await state().catch(() => ({ unavailable: true })), null, 2), contentType: 'application/json' });
@@ -241,6 +244,115 @@ test('Cmd+N / Ctrl+N 触发官网新对话，快捷和完整窗口均聚焦输�
   await expect(input).toBeVisible();
 });
 
+test('新对话根据 ARIA 名称、提示和同源链接识别，不依赖图标和类名', async () => {
+  await launch('new-chat-semantics'); await signIn();
+  const input = web.getByRole('textbox', { name: '给 DeepSeek 发送消息' });
+  for (const source of ['aria-labelledby', 'aria-describedby', 'data-tooltip', 'data-testid', 'link']) {
+    await web.evaluate(source => {
+      document.querySelector('#new')?.remove();
+      document.querySelector('#mobile-new')?.remove();
+      document.querySelector('#semantic-new')?.remove();
+      document.querySelector('#new-label')?.remove();
+      document.querySelector('#new-label-suffix')?.remove();
+      const main = document.querySelector('main')!;
+      const wrapper = document.createElement('div');
+      wrapper.tabIndex = 0;
+      wrapper.id = 'semantic-new';
+      const button = document.createElement(source === 'link' ? 'a' : 'button');
+      button.innerHTML = '<svg width="20" height="20"><path d="M1 1L18 18"/></svg>';
+      if (source === 'link') {
+        button.setAttribute('href', '/');
+      } else if (source === 'data-tooltip') {
+        button.setAttribute(source, 'Start a new conversation (⌘ N)');
+      } else if (source === 'data-testid') {
+        button.setAttribute(source, 'create-conversation-button');
+      } else {
+        const label = document.createElement('span');
+        label.id = 'new-label';
+        label.hidden = true;
+        label.textContent = 'Start a new';
+        const suffix = document.createElement('span');
+        suffix.id = 'new-label-suffix';
+        suffix.hidden = true;
+        suffix.textContent = 'conversation';
+        main.append(label);
+        main.append(suffix);
+        button.setAttribute(source, `${label.id} ${suffix.id}`);
+      }
+      button.addEventListener('click', event => {
+        event.preventDefault();
+        (window as any).newCount++;
+        document.querySelector('textarea')!.value = '';
+        history.pushState({}, '', '/');
+      });
+      wrapper.append(button);
+      main.prepend(wrapper);
+      history.pushState({}, '', '/a/chat/s/semantic-conversation');
+    }, source);
+    await input.fill(`验证 ${source}`);
+    const count = await web.evaluate(() => (window as any).newCount);
+    await web.keyboard.press(process.platform === 'darwin' ? 'Meta+n' : 'Control+n');
+    await expect(input).toHaveValue('');
+    await expect(web).toHaveURL(`${service.url}/`);
+    expect(await web.evaluate(() => (window as any).newCount)).toBe(count + 1);
+    await expect(input).toBeFocused();
+  }
+});
+
+test('官网改版没有可识别的新对话入口时回到首页，跳过无效控件并保留登录', async () => {
+  await launch('new-chat-route-fallback'); await signIn();
+  for (const mode of ['quick', 'full']) {
+    if (mode === 'full') await shell.getByRole('button', { name: '展开窗口' }).click();
+    await web.evaluate(() => {
+      history.pushState({}, '', '/a/chat/s/redesigned-conversation');
+      const button = document.querySelector('#mobile-new')!;
+      button.removeAttribute('aria-label');
+      button.innerHTML = '<svg width="20" height="20"><path d="M1 1L18 18"/></svg>';
+      document.querySelector('#new')?.remove();
+      const main = document.querySelector('main')!;
+      main.insertAdjacentHTML('afterbegin', '<button hidden>New chat</button><button disabled>New chat</button><div role="button" aria-disabled="true">New chat</div><a href="https://example.com/">New chat</a><button>删除新对话</button>');
+      document.querySelector('#messages')!.innerHTML = '<div tabindex="0"><button>New chat</button><a href="/">New chat</a></div>';
+      localStorage.removeItem('unexpectedNewChatClick');
+      for (const control of main.querySelectorAll('button, a, [role="button"]')) {
+        if (control === button) continue;
+        control.addEventListener('click', event => { event.preventDefault(); localStorage.setItem('unexpectedNewChatClick', 'yes'); });
+      }
+    });
+    await web.getByRole('textbox', { name: '给 DeepSeek 发送消息' }).fill('改版后的草稿');
+    await web.keyboard.press(process.platform === 'darwin' ? 'Meta+n' : 'Control+n');
+    await expect(web).toHaveURL(`${service.url}/`);
+    await expect(web.getByRole('textbox', { name: '给 DeepSeek 发送消息' })).toHaveValue('');
+    await expect(web.getByRole('textbox', { name: '给 DeepSeek 发送消息' })).toBeFocused();
+    expect(await web.evaluate(() => localStorage.getItem('unexpectedNewChatClick'))).toBeNull();
+    expect(await web.evaluate(() => localStorage.getItem('logged'))).toBe('yes');
+    expect(await web.evaluate(() => document.cookie)).toContain('fixtureSession=active');
+  }
+});
+
+test('新对话按钮失效后自动回到首页，首页与登录页不重复刷新', async () => {
+  await launch('new-chat-inactive-control'); await signIn();
+  await web.evaluate(() => {
+    history.pushState({}, '', '/a/chat/s/inactive-control');
+    document.querySelector('#mobile-new')!.replaceWith(document.querySelector('#mobile-new')!.cloneNode(true));
+  });
+  await web.keyboard.press(process.platform === 'darwin' ? 'Meta+n' : 'Control+n');
+  await expect(web).toHaveURL(`${service.url}/`);
+  await web.evaluate(() => {
+    document.querySelector('#new')?.remove();
+    document.querySelector('#mobile-new')?.remove();
+  });
+  const instance = await web.evaluate(() => (window as any).instanceId);
+  await web.keyboard.press(process.platform === 'darwin' ? 'Meta+n' : 'Control+n');
+  await expect(web.getByRole('textbox', { name: '给 DeepSeek 发送消息' })).toBeFocused();
+  await expect.poll(() => web.evaluate(() => (window as any).instanceId)).toBe(instance);
+  await shell.getByRole('button', { name: '展开侧边栏' }).click();
+  await web.getByRole('button', { name: '退出登录' }).click();
+  await expect.poll(async () => (await state()).host).toBe('login');
+  await web.keyboard.press(process.platform === 'darwin' ? 'Meta+n' : 'Control+n');
+  await expect(web.getByRole('button', { name: '登录', exact: true })).toBeVisible();
+  expect(await web.evaluate(() => (window as any).instanceId)).toBe(instance);
+});
+
 test('快捷窗口从 360 高度随对话长高，到屏幕上限后滚动，新对话恢复紧凑', async () => {
   await launch('adaptive-height'); await signIn();
   await expect.poll(async () => (await state()).bounds.height).toBe(360);
@@ -361,4 +473,106 @@ test('呼出后用户选择其他输入框或打开网页弹层时尊重焦点�
   await expect.poll(async () => (await state()).loadState).toBe('ready');
   await expect.poll(async () => (await state()).visible).toBe(false);
   await expect(input).not.toBeFocused();
+});
+
+test('从 GitHub Release 检查更新，匹配平台下载并校验后交给系统安装', async () => {
+  await launch('updates-download'); await signIn();
+  expect((await state()).version).toBe(JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')).version);
+  const prefs = await settings();
+  await prefs.getByRole('button', { name: '检查更新', exact: true }).click();
+  await expect(prefs.locator('#update-status')).toContainText('9.10.0');
+  expect(await desktop.evaluate(({ Menu }) => Menu.getApplicationMenu()!.items.some(item => item.submenu?.items.some(child => child.label === '检查更新…')))).toBe(true);
+  await prefs.getByRole('button', { name: '下载更新', exact: true }).click();
+  await expect(prefs.getByRole('progressbar', { name: '更新下载进度' })).toBeVisible();
+  await expect(prefs.getByRole('button', { name: '打开安装包', exact: true })).toBeVisible();
+  const extension = process.platform === 'darwin' ? 'dmg' : 'exe';
+  const name = `ChatDeepSeek-9.10.0-${process.arch}.${extension}`;
+  expect(releases.state().downloads).toEqual([`/releases/download/v9.10.0/${name}`]);
+  expect(await readFile(path.join(dataDir, 'updates', name))).toEqual(releases.installer);
+  await prefs.getByRole('button', { name: '打开安装包', exact: true }).click();
+  await expect.poll(async () => (await state()).openedInstaller).toBe(path.join(dataDir, 'updates', name));
+  await expect(prefs.locator('#update-status')).toContainText('安装包已打开');
+  expect(await web.evaluate(() => localStorage.getItem('logged'))).toBe('yes');
+});
+
+test('更新检查忽略旧版本、当前版本、草稿和预发行版本', async () => {
+  await launch('updates-version-policy');
+  const prefs = await settings();
+  for (const mode of ['current', 'older', 'draft', 'prerelease']) {
+    releases.setMode(mode);
+    await prefs.getByRole('button', { name: '检查更新', exact: true }).click();
+    await expect(prefs.locator('#update-status')).toContainText('已是最新稳定版本');
+    await expect(prefs.getByRole('button', { name: '下载更新', exact: true })).toBeHidden();
+  }
+  expect(releases.state().downloads).toEqual([]);
+});
+
+test('更新检查拒绝无效版本、损坏元数据、缺失平台安装包及不可信下载地址', async () => {
+  await launch('updates-invalid-release');
+  const prefs = await settings();
+  for (const mode of ['invalid-version', 'invalid-json', 'missing-asset', 'untrusted', 'missing-digest']) {
+    releases.setMode(mode);
+    await prefs.getByRole('button', { name: '检查更新', exact: true }).click();
+    await expect.poll(async () => (await state()).update.status).toBe('error');
+    await expect(prefs.locator('#update-status')).not.toBeEmpty();
+    await expect(prefs.getByRole('button', { name: '下载更新', exact: true })).toBeHidden();
+  }
+  expect(releases.state().downloads).toEqual([]);
+});
+
+test('更新网络故障和限流可重试，重复操作只发送一次请求', async () => {
+  await launch('updates-retry');
+  const prefs = await settings();
+  for (const mode of ['offline', 'limited']) {
+    releases.setMode(mode);
+    await prefs.getByRole('button', { name: '检查更新', exact: true }).click();
+    await expect.poll(async () => (await state()).update.status).toBe('error');
+  }
+  releases.reset();
+  await prefs.evaluate(() => { const button = document.querySelector<HTMLButtonElement>('#check-update')!; button.click(); button.click(); });
+  await expect(prefs.locator('#update-status')).toContainText('9.10.0');
+  expect(releases.state().checks).toBe(1);
+  await prefs.evaluate(() => { const button = document.querySelector<HTMLButtonElement>('#update-action')!; button.click(); button.click(); });
+  await expect(prefs.getByRole('button', { name: '打开安装包', exact: true })).toBeVisible();
+  expect(releases.state().downloads).toHaveLength(1);
+});
+
+test('更新下载失败、中断或校验不匹配时清理文件，重试后可安装', async () => {
+  await launch('updates-integrity');
+  const prefs = await settings();
+  for (const mode of ['download-error', 'interrupted', 'corrupted']) {
+    releases.setMode(mode);
+    await prefs.getByRole('button', { name: '检查更新', exact: true }).click();
+    await expect(prefs.getByRole('button', { name: '下载更新', exact: true })).toBeVisible();
+    await prefs.getByRole('button', { name: '下载更新', exact: true }).click();
+    await expect.poll(async () => (await state()).update.status).toBe('error');
+    expect(await readdir(path.join(dataDir, 'updates'))).toEqual([]);
+    expect((await state()).openedInstaller).toBe('');
+  }
+  releases.setMode('available');
+  await prefs.getByRole('button', { name: '检查更新', exact: true }).click();
+  await expect(prefs.getByRole('button', { name: '下载更新', exact: true })).toBeVisible();
+  await prefs.getByRole('button', { name: '下载更新', exact: true }).click();
+  await expect(prefs.getByRole('button', { name: '打开安装包', exact: true })).toBeVisible();
+});
+
+test('打开更新安装包前重新校验，文件被修改或系统拒绝时不报告安装成功', async () => {
+  await launch('updates-open-validation');
+  const prefs = await settings();
+  await prefs.getByRole('button', { name: '检查更新', exact: true }).click();
+  await expect(prefs.getByRole('button', { name: '下载更新', exact: true })).toBeVisible();
+  await prefs.getByRole('button', { name: '下载更新', exact: true }).click();
+  await expect(prefs.getByRole('button', { name: '打开安装包', exact: true })).toBeVisible();
+  const [file] = await readdir(path.join(dataDir, 'updates'));
+  await writeFile(path.join(dataDir, 'updates', file), 'modified installer');
+  await prefs.getByRole('button', { name: '打开安装包', exact: true }).click();
+  await expect.poll(async () => (await state()).update.status).toBe('error');
+  expect((await state()).openedInstaller).toBe('');
+  await prefs.getByRole('button', { name: '检查更新', exact: true }).click();
+  await expect(prefs.getByRole('button', { name: '下载更新', exact: true })).toBeVisible();
+  await prefs.getByRole('button', { name: '下载更新', exact: true }).click();
+  await expect(prefs.getByRole('button', { name: '打开安装包', exact: true })).toBeVisible();
+  await action('failInstallerOpen');
+  await prefs.getByRole('button', { name: '打开安装包', exact: true }).click();
+  await expect(prefs.locator('#update-status')).toContainText('无法打开安装包');
 });

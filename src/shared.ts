@@ -1,5 +1,11 @@
 export type WindowMode = 'quick' | 'full';
 export type Theme = 'system' | 'light' | 'dark';
+export interface UpdateState {
+  status: 'idle' | 'checking' | 'current' | 'available' | 'downloading' | 'ready' | 'error';
+  version: string;
+  progress: number;
+  message: string;
+}
 export interface SavedBounds { x?: number; y?: number; width: number; height: number }
 export interface Settings {
   shortcut: string;
@@ -28,6 +34,7 @@ export interface AppState {
   packaged: boolean;
   testing: boolean;
   platform: string;
+  update: UpdateState;
 }
 export interface Result { ok: boolean; message?: string }
 export interface WireAPI {

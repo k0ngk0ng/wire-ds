@@ -28,6 +28,17 @@ function render(state: AppState) {
   get('shortcut-warning').hidden = state.shortcutRegistered && !state.settingsWarning;
   get('shortcut-warning').textContent = state.shortcutError || state.settingsWarning;
   get('version').textContent = `版本 ${state.version}`;
+  const update = state.update;
+  const busy = update.status === 'checking' || update.status === 'downloading';
+  get<HTMLButtonElement>('check-update').disabled = busy;
+  get('update-status').textContent = update.message;
+  get('update-status').dataset.status = update.status;
+  const updateAction = get<HTMLButtonElement>('update-action');
+  updateAction.hidden = !['available', 'ready', 'downloading'].includes(update.status);
+  updateAction.disabled = busy;
+  updateAction.textContent = update.status === 'ready' ? '打开安装包' : update.status === 'downloading' ? '正在下载…' : '下载更新';
+  get<HTMLProgressElement>('update-progress').hidden = update.status !== 'downloading';
+  get<HTMLProgressElement>('update-progress').value = update.progress;
 }
 function feedback(message: string, error = false) {
   get('settings-error').hidden = !error; get('settings-error').textContent = error ? message : '';
@@ -76,4 +87,6 @@ for (const [id, key, boolean] of controls) {
   });
 }
 document.querySelectorAll<HTMLElement>('[data-action]').forEach(el => el.addEventListener('click', () => { void window.wire.action(el.dataset.action!); }));
+get('check-update').addEventListener('click', () => { void window.wire.action('check-update'); });
+get('update-action').addEventListener('click', () => { void window.wire.action(current.update.status === 'ready' ? 'install-update' : 'download-update'); });
 window.wire.onState(render); void window.wire.getState().then(render);

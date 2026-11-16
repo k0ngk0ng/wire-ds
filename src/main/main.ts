@@ -3,10 +3,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { SettingsStore, sanitizeSettings } from './settings';
+import { ReleaseUpdater } from './updates';
 import type { AppState, Result, Settings, WindowMode, SavedBounds } from '../shared';
 
 const projectRoot = path.resolve(__dirname, '../..');
 const testing = !app.isPackaged && process.env.WIRE_DS_TEST === '1';
+const applicationVersion: string = app.isPackaged ? app.getVersion() : JSON.parse(fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf8')).version;
 // Keep the historical profile directory and appId so renaming preserves login state.
 const dataDirectory = process.env.WIRE_DS_DATA_DIR || (app.isPackaged ? path.join(app.getPath('appData'), 'Wire DeepSeek') : path.join(projectRoot, '.runtime', 'development'));
 for (const directory of [dataDirectory, path.join(dataDirectory, 'logs'), path.join(dataDirectory, 'crashes'), path.join(dataDirectory, 'sessions')]) fs.mkdirSync(directory, { recursive: true });
@@ -55,6 +57,19 @@ class Desktop {
   private lastURL = website + this.store.value.lastChatPath;
   private contentHeight = 360;
   private webSession = session.fromPartition('persist:deepseek');
+  private updateTimer?: NodeJS.Timeout;
+  private openedInstaller = '';
+  private failInstallerOpen = false;
+  private updater = new ReleaseUpdater({
+    version: applicationVersion, platform: process.platform, arch: process.arch, directory: path.join(dataDirectory, 'updates'),
+    endpoint: testing ? process.env.WIRE_DS_TEST_UPDATE_URL : undefined,
+    onChange: () => this.broadcast(),
+    openInstaller: async file => {
+      if (!testing) return shell.openPath(file);
+      if (this.failInstallerOpen) return 'Test installer could not open';
+      this.openedInstaller = file; return '';
+    },
+  });
 
   constructor() {
     nativeTheme.themeSource = this.store.value.theme;
@@ -88,6 +103,7 @@ class Desktop {
     });
     this.main.once('ready-to-show', () => this.show(false));
     void this.navigate(this.lastURL);
+    if (app.isPackaged) this.updateTimer = setTimeout(() => void this.updater.check(), 5000);
   }
 
   private createHost(page: string, bounds: SavedBounds) {
@@ -420,6 +436,9 @@ class Desktop {
       case 'retry': await this.navigate(this.lastURL || website); break;
       case 'reload': await this.navigate(this.view.webContents.getURL() || website); break;
       case 'website': safeExternal(website); break;
+      case 'check-update': this.openSettings(); return this.updater.check();
+      case 'download-update': return this.updater.download();
+      case 'install-update': return this.updater.install();
       case 'quit': app.quit(); break;
       default: return { ok: false, message: '未知操作。' };
     }
@@ -452,7 +471,7 @@ class Desktop {
   state(): AppState {
     return { settings: this.store.value, mode: this.mode, host: this.host, loadState: this.loadState, error: this.error,
       shortcutRegistered: this.shortcutRegistered, shortcutError: this.shortcutError,
-      settingsWarning: this.store.warning, sidebarCollapsed: this.sidebarCollapsed, version: app.getVersion(), packaged: app.isPackaged, testing, platform: process.platform };
+      settingsWarning: this.store.warning, sidebarCollapsed: this.sidebarCollapsed, version: applicationVersion, packaged: app.isPackaged, testing, platform: process.platform, update: { ...this.updater.state } };
   }
   broadcast() { for (const win of this.windows()) win.webContents.send('wire:state', this.state()); }
 
@@ -461,6 +480,7 @@ class Desktop {
       { label: 'ChatDeepSeek', submenu: [
         { role: 'about', label: '关于 ChatDeepSeek' }, { type: 'separator' },
         { label: '设置…', accelerator: 'CommandOrControl+,', click: () => this.openSettings() },
+        { label: '检查更新…', click: () => void this.action('check-update') },
         { type: 'separator' }, { role: 'hide', label: '隐藏 ChatDeepSeek' }, { role: 'hideOthers', label: '隐藏其他' },
         { role: 'unhide', label: '显示全部' }, { type: 'separator' }, { role: 'quit', label: '退出 ChatDeepSeek' },
       ] },
@@ -483,12 +503,13 @@ class Desktop {
       { label: '打开 ChatDeepSeek', click: () => this.show() },
       { label: '新对话', click: () => { this.show(); this.pageAction('new-chat'); } },
       { label: `快捷键：${this.store.value.shortcut}${this.shortcutRegistered ? '' : '（不可用）'}`, enabled: false },
-      { type: 'separator' }, { label: '设置…', click: () => this.openSettings() }, { label: '退出', click: () => app.quit() },
+      { type: 'separator' }, { label: '设置…', click: () => this.openSettings() }, { label: '检查更新…', click: () => void this.action('check-update') }, { label: '退出', click: () => app.quit() },
     ]));
   }
 
   async shutdown() {
-    clearTimeout(this.saveTimer); clearTimeout(this.failureTimer); this.saveBounds();
+    clearTimeout(this.saveTimer); clearTimeout(this.failureTimer); clearTimeout(this.updateTimer); this.saveBounds();
+    await this.updater.stop();
     globalShortcut.unregisterAll();
     this.webSession.flushStorageData();
     await this.webSession.cookies.flushStore();
@@ -496,7 +517,7 @@ class Desktop {
 
   testAPI() {
     return {
-      state: () => ({ ...this.state(), visible: this.owner().isVisible(), alwaysOnTop: this.main.isAlwaysOnTop(), pageId: this.view.webContents.id, bounds: this.main.getBounds(), focused: this.owner().isFocused() }),
+      state: () => ({ ...this.state(), visible: this.owner().isVisible(), alwaysOnTop: this.main.isAlwaysOnTop(), pageId: this.view.webContents.id, bounds: this.main.getBounds(), focused: this.owner().isFocused(), openedInstaller: this.openedInstaller }),
       action: async (name: string, value?: unknown) => {
         if (name === 'shortcut') { this.shortcut(); return; }
         if (name === 'close') { this.main.close(); return; }
@@ -504,6 +525,7 @@ class Desktop {
         if (name === 'hide') { this.hide(); return; }
         if (name === 'navigate') { await this.navigate(value as string); return; }
         if (name === 'occupyShortcut') { return globalShortcut.register(value as string, () => {}); }
+        if (name === 'failInstallerOpen') { this.failInstallerOpen = true; return; }
         return this.action(name);
       },
       untrustedIPC: () => this.trusted({ sender: this.view.webContents, senderFrame: this.view.webContents.mainFrame } as IpcMainInvokeEvent),
@@ -517,7 +539,7 @@ if (hasLock) {
     if (!trayIcon.isEmpty()) { if (process.platform === 'darwin') trayIcon.setTemplateImage(true); tray = new Tray(trayIcon); tray.setToolTip('ChatDeepSeek'); }
     controller = new Desktop();
     tray?.on('click', () => controller.show());
-    app.setAboutPanelOptions({ applicationName: 'ChatDeepSeek', applicationVersion: app.getVersion(), copyright: '独立桌面客户端 · 非 DeepSeek 官方应用', website: 'https://chat.deepseek.com/' });
+    app.setAboutPanelOptions({ applicationName: 'ChatDeepSeek', applicationVersion, copyright: '独立桌面客户端 · 非 DeepSeek 官方应用', website: 'https://chat.deepseek.com/' });
     const icon = nativeImage.createFromPath(path.join(projectRoot, 'assets/icon.png'));
     if (!icon.isEmpty()) app.dock?.setIcon(icon);
     if (testing) (globalThis as any).__wireTest = controller.testAPI();

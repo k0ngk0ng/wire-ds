@@ -14,6 +14,10 @@
     <div class="setting-row"><label for="theme">主题</label><select id="theme" aria-label="主题"><option value="system">跟随系统</option><option value="light">浅色</option><option value="dark">深色</option></select></div>
     <div class="setting-row"><div><label for="launch-at-login">登录 Mac 时启动</label><p id="launch-note" hidden>安装应用后可开启</p></div><input type="checkbox" role="switch" id="launch-at-login" aria-label="登录 Mac 时启动"></div>
   </div></section>
+  <section class="settings-section" aria-labelledby="update-heading"><h2 id="update-heading">应用更新</h2><div class="settings-card">
+    <div class="setting-row"><span id="version">版本</span><div class="update-actions"><button id="check-update" class="text-button">检查更新</button><button id="update-action" class="small-button" hidden>下载更新</button></div></div>
+    <div class="update-details"><p id="update-status" aria-live="polite">更新来源：GitHub Releases</p><progress id="update-progress" max="100" value="0" aria-label="更新下载进度" hidden></progress></div>
+  </div></section>
   <div class="feedback"><p id="settings-status" role="status" aria-live="polite"></p><p id="settings-error" role="alert" hidden></p></div>
-  <footer class="settings-footer"><span id="version">版本 1.0.0</span><span>独立客户端 · 登录与对话由 DeepSeek 提供</span><button class="text-button" data-action="website">打开官网 <span aria-hidden="true">↗</span></button></footer>
+  <footer class="settings-footer"><span>独立客户端 · 登录与对话由 DeepSeek 提供</span><button class="text-button" data-action="website">打开官网 <span aria-hidden="true">↗</span></button></footer>
 </main><script src="settings.js"></script></body></html>
