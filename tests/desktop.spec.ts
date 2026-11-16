@@ -376,6 +376,112 @@ test('快捷窗口从 360 高度随对话长高，到屏幕上限后滚动，新
   await expect.poll(async () => (await state()).bounds.height).toBe(360);
 });
 
+async function recordBounds(position: 'top' | 'bottom' = 'top') {
+  return desktop.evaluate(({ BrowserWindow, screen }, position) => {
+    const window = BrowserWindow.getAllWindows().find(window => /\/shell\.html$/.test(window.webContents.getURL()))!;
+    const bounds = window.getBounds();
+    const area = screen.getDisplayMatching(bounds).workArea;
+    const y = position === 'top' ? area.y + 20 : area.y + area.height - 440;
+    window.setBounds({ ...bounds, y, height: 360 });
+    const frames: { time: number; x: number; y: number; width: number; height: number }[] = [];
+    (globalThis as any).__boundsFrames = frames;
+    const start = performance.now();
+    const record = () => {
+      const bounds = window.getBounds();
+      const previous = frames.at(-1);
+      if (!previous || previous.height !== bounds.height || previous.y !== bounds.y) frames.push({ time: performance.now() - start, ...bounds });
+    };
+    window.on('resize', record); window.on('move', record); record();
+    return { bounds: window.getBounds(), area };
+  }, position);
+}
+async function boundsFrames() {
+  return desktop.evaluate(() => (globalThis as any).__boundsFrames as { time: number; x: number; y: number; width: number; height: number }[]);
+}
+
+test('内容突增时连续向下扩展，上沿固定并产出原生窗口轨迹', async ({}, info) => {
+  await launch('smooth-height-burst'); await signIn();
+  await expect.poll(async () => (await state()).bounds.height).toBe(360);
+  const { bounds, area } = await recordBounds();
+  const expectedHeight = Math.min(Math.floor(area.height * .8), area.y + area.height - bounds.y);
+  await web.evaluate(height => { document.querySelector('#messages')!.innerHTML = `<div style="height:${height}px">连续增长的回答</div>`; }, area.height * 2);
+  await expect.poll(async () => (await state()).bounds.height).toBe(expectedHeight);
+  const frames = await boundsFrames();
+  await info.attach('native-window-growth', { body: JSON.stringify(frames, null, 2), contentType: 'application/json' });
+  expect(frames.length).toBeGreaterThan(5);
+  expect(Math.max(...frames.slice(1).map((frame, index) => frame.height - frames[index].height))).toBeLessThan((expectedHeight - bounds.height) * .5);
+  expect(frames.every(frame => frame.y === bounds.y && frame.x === bounds.x && frame.width === bounds.width)).toBe(true);
+  expect(frames.every((frame, index) => !index || frame.height >= frames[index - 1].height)).toBe(true);
+  await shell.screenshot({ path: info.outputPath('expanded-window.png') });
+});
+
+test('屏幕底部限制向下扩展，不向上顶动窗口', async ({}, info) => {
+  await launch('smooth-height-bottom'); await signIn();
+  await expect.poll(async () => (await state()).bounds.height).toBe(360);
+  const { bounds, area } = await recordBounds('bottom');
+  await web.evaluate(height => { document.querySelector('#messages')!.innerHTML = `<div style="height:${height}px">屏幕底部测试</div>`; }, area.height * 2);
+  const expectedHeight = Math.min(Math.floor(area.height * .8), area.y + area.height - bounds.y);
+  await expect.poll(async () => (await state()).bounds.height).toBe(expectedHeight);
+  const frames = await boundsFrames();
+  await info.attach('native-window-bottom-edge', { body: JSON.stringify(frames, null, 2), contentType: 'application/json' });
+  expect(frames.every(frame => frame.y === bounds.y)).toBe(true);
+  expect(frames.every(frame => frame.y + frame.height <= area.y + area.height)).toBe(true);
+});
+
+test('流式目标持续增长和虚拟列表回收时不来回缩放，新对话恢复紧凑', async ({}, info) => {
+  await launch('smooth-height-stream'); await signIn();
+  await recordBounds();
+  await web.evaluate(async () => {
+    const message = document.createElement('div');
+    message.style.height = '100px';
+    document.querySelector('#messages')!.append(message);
+    for (let i = 0; i < 12; i++) { message.style.height = `${100 + i * 35}px`; await new Promise(resolve => setTimeout(resolve, 70)); }
+  });
+  await expect.poll(async () => (await state()).bounds.height).toBeGreaterThan(500);
+  await web.evaluate(() => { document.querySelector<HTMLElement>('#messages > div')!.style.height = '60px'; });
+  await web.evaluate(() => new Promise(resolve => setTimeout(resolve, 600)));
+  const frames = await boundsFrames();
+  await info.attach('native-window-stream', { body: JSON.stringify(frames, null, 2), contentType: 'application/json' });
+  expect(frames.every((frame, index) => !index || frame.height >= frames[index - 1].height)).toBe(true);
+  await shell.getByRole('button', { name: '新对话', exact: true }).click();
+  await expect.poll(async () => (await state()).bounds.height).toBe(360);
+});
+
+test('切换完整模式、关闭自动高度或隐藏窗口时终止扩展动画', async () => {
+  await launch('smooth-height-interrupt'); await signIn();
+  await recordBounds();
+  await web.evaluate(() => { document.querySelector('#messages')!.innerHTML = '<div style="height:1400px">中断扩展</div>'; });
+  await expect.poll(async () => (await state()).bounds.height).toBeGreaterThan(360);
+  await shell.getByRole('button', { name: '展开窗口' }).click();
+  const fullBounds = (await state()).bounds;
+  await web.evaluate(() => new Promise(resolve => setTimeout(resolve, 600)));
+  expect((await state()).bounds).toEqual(fullBounds);
+  await shell.getByRole('button', { name: '切换到快捷窗口' }).click();
+  const prefs = await settings();
+  await prefs.getByLabel('快捷窗口随对话调整高度').uncheck();
+  const fixedBounds = (await state()).bounds;
+  await web.evaluate(() => { document.querySelector('#messages')!.innerHTML = '<div style="height:2000px">更长回答</div>'; });
+  await web.evaluate(() => new Promise(resolve => setTimeout(resolve, 600)));
+  expect((await state()).bounds).toEqual(fixedBounds);
+  await prefs.getByLabel('快捷窗口随对话调整高度').check();
+  await action('hide');
+  const hiddenBounds = (await state()).bounds;
+  await web.evaluate(() => { document.querySelector('#messages')!.innerHTML = ''; });
+  await web.evaluate(() => new Promise(resolve => setTimeout(resolve, 600)));
+  expect((await state()).bounds).toEqual(hiddenBounds);
+  await action('show');
+  await expect.poll(async () => (await state()).bounds.height).toBe(360);
+});
+
+test('减少动态效果开启时直接调整尺寸', async () => {
+  await launch('smooth-height-reduced-motion'); await signIn();
+  await web.emulateMedia({ reducedMotion: 'reduce' });
+  const { bounds, area } = await recordBounds();
+  await web.evaluate(height => { document.querySelector('#messages')!.innerHTML = `<div style="height:${height}px">减少动态效果</div>`; }, area.height * 2);
+  await expect.poll(async () => (await state()).bounds.height).toBe(Math.min(Math.floor(area.height * .8), area.y + area.height - bounds.y));
+  expect((await boundsFrames()).length).toBeLessThanOrEqual(3);
+});
+
 test('退出重启后继续上次会话，不只保留账号登录', async () => {
   await launch('restore-conversation'); await signIn();
   await web.evaluate(() => history.pushState({}, '', '/a/chat/s/fixture-conversation'));

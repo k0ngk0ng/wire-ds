@@ -104,7 +104,7 @@ function collapseThinking() {
     if (Array.from(group.querySelectorAll('.ds-think-content')).some(el => el.getClientRects().length > 0)) control.click();
   }
 }
-function conversationHeight(): number {
+function conversationHeight(messages: HTMLElement[]): number {
   const input = composer();
   if (!input) return 360;
   let inputHeight = input.getBoundingClientRect().height;
@@ -113,7 +113,6 @@ function conversationHeight(): number {
     const height = parent.getBoundingClientRect().height;
     if (height >= 70 && height <= 240) inputHeight = Math.max(inputHeight, height);
   }
-  const messages = Array.from(document.querySelectorAll<HTMLElement>('.ds-message, [data-message-id], [data-role="message"], #messages > *')).filter(el => el.getClientRects().length > 0);
   if (!messages.length) return 360 + Math.max(0, inputHeight - 124);
   const rects = messages.map(el => el.getBoundingClientRect());
   const top = Math.min(...rects.map(r => r.top));
@@ -128,7 +127,8 @@ function probe(force = false) {
   const input = composer();
   const loginInput = Array.from(document.querySelectorAll('input[type="password"], input[autocomplete="tel"], input[autocomplete="username"]')).some(visible);
   const loginPath = /\/(?:sign_in|sign-in|login|auth)(?:\/|\?|$)/i.test(location.pathname);
-  const info = { auth: input ? 'chat' : (loginInput || loginPath) ? 'login' : 'unknown', sidebarCollapsed: isCollapsed(), contentHeight: Math.ceil(conversationHeight()) };
+  const messages = Array.from(document.querySelectorAll<HTMLElement>('.ds-message, [data-message-id], [data-role="message"], #messages > *')).filter(el => el.getClientRects().length > 0);
+  const info = { auth: input ? 'chat' : (loginInput || loginPath) ? 'login' : 'unknown', sidebarCollapsed: isCollapsed(), contentHeight: Math.ceil(conversationHeight(messages)), hasMessages: messages.length > 0, reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches };
   const serialized = JSON.stringify(info);
   if (force || serialized !== lastProbe) { lastProbe = serialized; ipcRenderer.send('wire:page-state', info); }
 }
@@ -177,5 +177,6 @@ window.addEventListener('DOMContentLoaded', () => {
   window.addEventListener('resize', queueProbe);
   document.addEventListener('load', queueProbe, true);
   window.addEventListener('popstate', queueProbe);
+  matchMedia('(prefers-reduced-motion: reduce)').addEventListener('change', () => probe(true));
   probe();
 });

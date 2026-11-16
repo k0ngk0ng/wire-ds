@@ -56,6 +56,12 @@ class Desktop {
   private lastForeground = false;
   private lastURL = website + this.store.value.lastChatPath;
   private contentHeight = 360;
+  private reducedMotion = false;
+  private manualResizing = false;
+  private heightFrame?: NodeJS.Timeout;
+  private shrinkTimer?: NodeJS.Timeout;
+  private shrinkTarget?: number;
+  private heightAnimation?: { x: number; y: number; width: number; height: number; nativeHeight: number; target: number; velocity: number; time: number };
   private webSession = session.fromPartition('persist:deepseek');
   private updateTimer?: NodeJS.Timeout;
   private openedInstaller = '';
@@ -90,6 +96,10 @@ class Desktop {
     this.buildMenu();
     this.main.on('resize', () => { this.layout(); this.scheduleBoundsSave(); });
     this.main.on('move', () => this.scheduleBoundsSave());
+    this.main.on('will-resize', () => { this.manualResizing = true; this.cancelHeightAdjustment(); });
+    this.main.on('will-move', () => { this.manualResizing = true; this.cancelHeightAdjustment(); });
+    this.main.on('resized', () => { this.manualResizing = false; this.scheduleBoundsSave(); });
+    this.main.on('moved', () => { this.manualResizing = false; this.scheduleBoundsSave(); });
     this.main.on('focus', () => { this.lastForeground = true; this.configurePage(true); });
     this.main.on('blur', () => { this.lastForeground = false; });
     this.main.on('close', event => { if (!quitting) { event.preventDefault(); this.hide(); } });
@@ -139,12 +149,13 @@ class Desktop {
     ipcMain.handle('wire:settings', (event, patch: unknown) => { if (!this.trusted(event)) return { ok: false }; return this.updateSettings(patch); });
     ipcMain.on('wire:page-state', (event, payload: unknown) => {
       if (event.sender.id !== this.view.webContents.id || !isOfficial(event.senderFrame?.url || '') || event.senderFrame !== event.sender.mainFrame) return;
-      const info = payload as { auth?: string; sidebarCollapsed?: boolean; contentHeight?: number };
+      const info = payload as { auth?: string; sidebarCollapsed?: boolean; contentHeight?: number; hasMessages?: boolean; reducedMotion?: boolean };
       if (info.auth === 'login' && this.loadState !== 'error') this.attach('login');
       if (info.auth === 'chat') this.attach('chat');
       if (typeof info.sidebarCollapsed === 'boolean') this.sidebarCollapsed = info.sidebarCollapsed;
+      if (typeof info.reducedMotion === 'boolean') this.reducedMotion = info.reducedMotion;
       if (Number.isFinite(info.contentHeight) && info.contentHeight! > 0) {
-        this.contentHeight = info.contentHeight!;
+        this.contentHeight = info.hasMessages ? Math.max(this.contentHeight, info.contentHeight!) : info.contentHeight!;
         this.adjustQuickHeight();
       }
       this.broadcast();
@@ -276,6 +287,7 @@ class Desktop {
 
   private attach(next: 'chat' | 'login') {
     if (this.host === next && (next === 'chat' ? this.main.contentView.children.includes(this.view) : this.login?.contentView.children.includes(this.view))) return;
+    this.cancelHeightAdjustment();
     const previous = this.owner();
     if (previous.contentView.children.includes(this.view)) previous.contentView.removeChildView(this.view);
     this.host = next;
@@ -304,17 +316,78 @@ class Desktop {
     this.view.setVisible(this.loadState !== 'error');
   }
 
+  private canAdjustQuickHeight() {
+    return !this.main.isDestroyed() && this.host === 'chat' && this.mode === 'quick' && this.store.value.quickAutoSize
+      && this.main.isVisible() && !this.main.isMinimized() && !this.main.isFullScreen() && !this.main.isMaximized() && !this.manualResizing;
+  }
+
+  private cancelHeightAdjustment() {
+    clearTimeout(this.heightFrame); clearTimeout(this.shrinkTimer);
+    this.heightFrame = undefined; this.shrinkTimer = undefined; this.shrinkTarget = undefined; this.heightAnimation = undefined;
+  }
+
+  private animateQuickHeight(height: number) {
+    if (!this.canAdjustQuickHeight()) { this.cancelHeightAdjustment(); return; }
+    const current = this.main.getBounds();
+    if (this.reducedMotion) {
+      this.cancelHeightAdjustment();
+      this.resizing = true;
+      this.main.setBounds({ ...current, height });
+      this.resizing = false; this.scheduleBoundsSave();
+      return;
+    }
+    if (this.heightAnimation) { this.heightAnimation.target = height; return; }
+    if (Math.abs(current.height - height) < 1) return;
+    clearTimeout(this.saveTimer);
+    this.heightAnimation = { ...current, nativeHeight: current.height, target: height, velocity: 0, time: performance.now() };
+    this.heightFrame = setTimeout(() => this.stepQuickHeight(), 16);
+  }
+
+  private stepQuickHeight() {
+    this.heightFrame = undefined;
+    const animation = this.heightAnimation;
+    if (!animation) return;
+    if (!this.canAdjustQuickHeight()) { this.cancelHeightAdjustment(); return; }
+    const current = this.main.getBounds();
+    if (current.x !== animation.x || current.y !== animation.y || current.width !== animation.width || current.height !== animation.nativeHeight) {
+      this.cancelHeightAdjustment(); this.scheduleBoundsSave(); return;
+    }
+    const now = performance.now();
+    const delta = Math.min(.032, Math.max(.001, (now - animation.time) / 1000));
+    animation.time = now;
+    const offset = animation.height - animation.target;
+    const slope = animation.velocity + 14 * offset;
+    const decay = Math.exp(-14 * delta);
+    const next = animation.target + (offset + slope * delta) * decay;
+    const distance = Math.max(-900 * delta, Math.min(900 * delta, next - animation.height));
+    animation.velocity = Math.abs(next - animation.height) > 900 * delta ? distance / delta : (animation.velocity - 14 * slope * delta) * decay;
+    animation.height += distance;
+    const done = Math.abs(animation.target - animation.height) < .75 && Math.abs(animation.velocity) < 8;
+    const height = done ? animation.target : Math.round(animation.height);
+    if (height !== current.height) {
+      this.resizing = true;
+      this.main.setBounds({ ...current, height });
+      animation.nativeHeight = height;
+      this.resizing = false;
+    }
+    if (done) { this.heightAnimation = undefined; this.scheduleBoundsSave(); return; }
+    this.heightFrame = setTimeout(() => this.stepQuickHeight(), 16);
+  }
+
   private adjustQuickHeight() {
-    if (this.host !== 'chat' || this.mode !== 'quick' || !this.store.value.quickAutoSize || this.main.isFullScreen() || this.main.isMaximized()) return;
+    if (!this.canAdjustQuickHeight()) { this.cancelHeightAdjustment(); return; }
     const current = this.main.getBounds();
     const area = screen.getDisplayMatching(current).workArea;
-    const maximum = Math.max(360, Math.floor(area.height * this.store.value.quickMaxHeightRatio));
+    const maximum = Math.max(360, Math.min(Math.floor(area.height * this.store.value.quickMaxHeightRatio), area.y + area.height - current.y));
     const height = Math.min(maximum, Math.max(360, Math.ceil(this.contentHeight)));
-    if (Math.abs(current.height - height) < 3) return;
-    this.resizing = true;
-    this.main.setBounds({ ...current, height, y: Math.max(area.y, Math.min(current.y, area.y + area.height - height)) });
-    this.resizing = false;
-    this.layout();
+    if (!this.reducedMotion && height < (this.heightAnimation?.target ?? current.height) - 2) {
+      if (this.shrinkTarget === height) return;
+      clearTimeout(this.shrinkTimer); this.shrinkTarget = height;
+      this.shrinkTimer = setTimeout(() => { this.shrinkTimer = undefined; this.shrinkTarget = undefined; this.animateQuickHeight(height); }, 180);
+      return;
+    }
+    clearTimeout(this.shrinkTimer); this.shrinkTimer = undefined; this.shrinkTarget = undefined;
+    this.animateQuickHeight(height);
   }
 
   private fittedBounds(saved: SavedBounds, recenter = false): Electron.Rectangle {
@@ -334,11 +407,13 @@ class Desktop {
   }
 
   private keepVisible() {
+    this.cancelHeightAdjustment();
     for (const win of [this.main, this.login]) if (win && !win.isDestroyed()) win.setBounds(this.fittedBounds(win.getBounds()));
+    this.adjustQuickHeight();
   }
 
   private scheduleBoundsSave() {
-    if (this.resizing || this.main.isFullScreen() || this.main.isMaximized()) return;
+    if (this.resizing || this.heightAnimation || this.main.isFullScreen() || this.main.isMaximized()) return;
     clearTimeout(this.saveTimer);
     this.saveTimer = setTimeout(() => this.saveBounds(), 250);
   }
@@ -350,6 +425,7 @@ class Desktop {
 
   setMode(mode: WindowMode) {
     if (mode === this.mode) return;
+    this.cancelHeightAdjustment();
     clearTimeout(this.saveTimer); this.saveBounds();
     this.mode = mode; this.resizing = true;
     if (this.main.isFullScreen()) this.main.setFullScreen(false);
@@ -370,10 +446,11 @@ class Desktop {
     if (process.platform === 'darwin') app.focus({ steal: true });
     win.show(); win.focus(); this.lastForeground = true;
     if (this.host === 'chat') { this.view.webContents.focus(); this.configurePage(true); }
+    this.adjustQuickHeight();
     if (fromShortcut && this.host === 'chat' && this.store.value.summonBehavior === 'new') this.pageAction('new-chat');
     this.broadcast();
   }
-  hide() { this.owner().hide(); this.lastForeground = false; this.broadcast(); }
+  hide() { this.cancelHeightAdjustment(); this.owner().hide(); this.lastForeground = false; this.broadcast(); }
   shortcut() {
     const win = this.owner();
     if (win.isVisible() && win.isFocused()) this.hide();
@@ -508,6 +585,7 @@ class Desktop {
   }
 
   async shutdown() {
+    this.cancelHeightAdjustment();
     clearTimeout(this.saveTimer); clearTimeout(this.failureTimer); clearTimeout(this.updateTimer); this.saveBounds();
     await this.updater.stop();
     globalShortcut.unregisterAll();
