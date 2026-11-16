@@ -160,3 +160,21 @@ test('辅助进程无法启动时保持原应用运行', async () => {
   await expect(prepared.start()).rejects.toThrow(/辅助进程/);
   expect(await desktop!.evaluate(({ app }) => app.getVersion())).toBe('0.1.0');
 });
+
+test('Windows 安装器异常退出时恢复旧版并重启', async () => {
+  test.skip(platform !== 'win32');
+  const setupResult = await setup('windows-rollback');
+  const failedInstaller = await fixtureBundle(path.join(directory, 'failed-installer'), '0.1.0');
+  await writeFile(path.join(directory, 'failed-installer/resources/app/main.cjs'), 'process.exit(3);');
+  await rm(path.join(setupResult.data, 'startup.json'), { force: true });
+  helperPID = await desktop!.evaluate(async (_electron, options) => {
+    const prepared = await (globalThis as any).__installer.prepareUpdate(options);
+    return prepared.start();
+  }, { ...setupResult, archive: failedInstaller, executablePath: setupResult.executable, dataDirectory: setupResult.data, platform, version: newVersion, restartTimeout: 15_000 });
+  await desktop!.close(); desktop = undefined;
+  await expect.poll(async () => JSON.parse(await readFile(path.join(setupResult.data, 'updates/install-state.json'), 'utf8').catch(() => '{}')).status, { timeout: 150_000 }).toBe('failed');
+  await expect.poll(async () => JSON.parse(await readFile(path.join(setupResult.data, 'startup.json'), 'utf8').catch(() => '{}')).version).toBe('0.1.0');
+  childPID = JSON.parse(await readFile(path.join(setupResult.data, 'startup.json'), 'utf8')).pid;
+  expect(childPID).not.toBe(setupResult.parentPID);
+  expect(await readFile(path.join(setupResult.data, 'preserved.txt'), 'utf8')).toBe('keep-login-and-settings');
+});
