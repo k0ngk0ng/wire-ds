@@ -1,7 +1,7 @@
 {
   "name": "wire-ds",
   "productName": "ChatDeepSeek",
-  "version": "1.0.7",
+  "version": "1.0.8",
   "description": "DeepSeek desktop companion with a configurable global shortcut",
   "private": true,
   "main": "dist/main/main.js",
