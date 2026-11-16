@@ -1,0 +1,21 @@
+name: Diagnose Windows update helper
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: node scripts/probe-update-helper.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-helper-probe
+          path: artifacts/helper-probe.json

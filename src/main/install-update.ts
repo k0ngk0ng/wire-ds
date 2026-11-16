@@ -180,7 +180,7 @@ export async function prepareUpdate(options: InstallOptions) {
       await mkdir(temporary, { recursive: true });
       const planFile = path.join(directory, 'install-plan.json');
       await writeFile(planFile, JSON.stringify({ ...options, executable, target, backup, state, acknowledgement, temporary, restartTimeout }), { mode: 0o600 });
-      command = 'powershell.exe';
+      command = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe');
       args = ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(windowsHelper(planFile), 'utf16le').toString('base64')];
     }
     return {
@@ -189,7 +189,7 @@ export async function prepareUpdate(options: InstallOptions) {
         await writeFile(state, JSON.stringify({ status: 'prepared', version: options.version }), { mode: 0o600 });
         const log = openSync(path.join(directory, 'install.log'), 'a', 0o600);
         try {
-          const child = spawn(command, args, { detached: true, windowsHide: true, stdio: ['ignore', log, log] });
+          const child = spawn(command, args, { detached: options.platform !== 'win32', windowsHide: true, stdio: ['ignore', log, log] });
           await new Promise<void>((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
           child.unref();
           for (let attempt = 0; attempt < 600; attempt++) {

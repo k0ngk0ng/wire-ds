@@ -27,8 +27,9 @@ async function fixtureBundle(destination: string, bundleVersion: string, actual 
   if (!actual) {
     await mkdir(path.join(resources, 'app'), { recursive: true });
     await cp(path.join(root, 'dist/main/install-update.js'), path.join(resources, 'app/install-update.cjs'));
+  await cp(path.join(root, 'dist/main/runtime-files.json'), path.join(resources, 'app/runtime-files.json'));
     await writeFile(path.join(resources, 'app/package.json'), JSON.stringify({ name: 'wire-ds', version: bundleVersion, main: 'main.cjs' }));
-    await writeFile(path.join(resources, 'app/main.cjs'), `const {app,BrowserWindow}=require('electron');const fs=require('node:fs');const path=require('node:path');const updater=require('./install-update.cjs');const data=process.env.WIRE_DS_DATA_DIR;for(const name of ['userData','sessionData','logs','crashDumps']){const dir=path.join(data,name);fs.mkdirSync(dir,{recursive:true});app.setPath(name,dir)}app.setPath('userData',data);if(process.argv.includes('/S'))process.exit(3);if(app.getVersion()==='9.10.0'&&fs.existsSync(path.join(data,'fail-start')))process.exit(4);app.whenReady().then(()=>{updater.beginUpdateStartup(data,app.getVersion());const win=new BrowserWindow({width:400,height:300});win.loadURL('data:text/html,<h1>Update restart '+app.getVersion()+'</h1>');win.once('ready-to-show',()=>{updater.completeUpdateStartup(data,app.getVersion());fs.writeFileSync(path.join(data,'startup.json'),JSON.stringify({version:app.getVersion(),pid:process.pid}));win.show()})});process.on('SIGTERM',()=>app.quit());`);
+    await writeFile(path.join(resources, 'app/main.cjs'), `const {app,BrowserWindow}=require('electron');const fs=require('node:fs');const path=require('node:path');const updater=require('./install-update.cjs');globalThis.__installer=updater;const data=process.env.WIRE_DS_DATA_DIR;for(const name of ['userData','sessionData','logs','crashDumps']){const dir=path.join(data,name);fs.mkdirSync(dir,{recursive:true});app.setPath(name,dir)}app.setPath('userData',data);if(process.argv.includes('/S'))process.exit(3);if(app.getVersion()==='9.10.0'&&fs.existsSync(path.join(data,'fail-start')))process.exit(4);app.whenReady().then(()=>{updater.beginUpdateStartup(data,app.getVersion());const win=new BrowserWindow({width:400,height:300});win.loadURL('data:text/html,<h1>Update restart '+app.getVersion()+'</h1>');win.once('ready-to-show',()=>{updater.completeUpdateStartup(data,app.getVersion());fs.writeFileSync(path.join(data,'startup.json'),JSON.stringify({version:app.getVersion(),pid:process.pid}));win.show()})});process.on('SIGTERM',()=>app.quit());`);
   }
   if (platform === 'darwin') {
     const plist = path.join(destination, 'Contents/Info.plist');
@@ -82,8 +83,10 @@ test.afterEach(async ({}, info) => {
 test('真实应用更新后替换原目录、自动重启并保留数据', async () => {
   const setupResult = await setup('restart');
   const installer = require('../dist/main/install-update.js');
-  const prepared = await installer.prepareUpdate({ ...setupResult, executablePath: setupResult.executable, dataDirectory: setupResult.data, platform, version: newVersion, restartTimeout: 15_000 });
-  helperPID = await prepared.start();
+  helperPID = await desktop!.evaluate(async (_electron, options) => {
+    const prepared = await (globalThis as any).__installer.prepareUpdate(options);
+    return prepared.start();
+  }, { ...setupResult, executablePath: setupResult.executable, dataDirectory: setupResult.data, platform, version: newVersion, restartTimeout: 15_000 });
   await desktop!.close(); desktop = undefined;
   await expect.poll(async () => JSON.parse(await readFile(path.join(setupResult.data, 'updates/install-state.json'), 'utf8').catch(() => '{}')).status, { timeout: 150_000 }).toBe('completed');
   const result = JSON.parse(await readFile(path.join(setupResult.data, 'updates/install-state.json'), 'utf8'));

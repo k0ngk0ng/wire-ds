@@ -371,7 +371,7 @@ class Desktop {
     if (height !== current.height) {
       this.resizing = true;
       this.main.setBounds({ ...current, height });
-      animation.nativeHeight = height;
+      animation.nativeHeight = this.main.getBounds().height;
       this.resizing = false;
     }
     if (done) { this.heightAnimation = undefined; this.scheduleBoundsSave(); return; }

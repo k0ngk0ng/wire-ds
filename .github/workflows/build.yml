@@ -11,10 +11,6 @@ on:
         description: Verify only Windows native update installation
         type: boolean
         default: false
-      windows_helper_probe:
-        description: Diagnose Windows update helper startup
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -24,21 +20,7 @@ concurrency:
   cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
-  helper-probe:
-    if: inputs.windows_helper_probe
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-      - run: node scripts/probe-update-helper.mjs
-      - uses: actions/upload-artifact@v4
-        with:
-          name: windows-helper-probe
-          path: artifacts/helper-probe.json
   build:
-    if: '!inputs.windows_helper_probe'
     name: ${{ matrix.platform }} · ${{ matrix.arch }}
     strategy:
       fail-fast: false

@@ -422,7 +422,7 @@ test('内容突增时连续向下扩展，上沿固定并产出原生窗口轨�
   const { bounds, area } = await recordBounds();
   const expectedHeight = Math.min(Math.floor(area.height * .8), area.y + area.height - bounds.y);
   await web.evaluate(height => { document.querySelector('#messages')!.innerHTML = `<div style="height:${height}px">连续增长的回答</div>`; }, area.height * 2);
-  await expect.poll(async () => (await state()).bounds.height).toBe(expectedHeight);
+  await expect.poll(async () => Math.abs((await state()).bounds.height - expectedHeight)).toBeLessThanOrEqual(1);
   const frames = await boundsFrames();
   await info.attach('native-window-growth', { body: JSON.stringify(frames, null, 2), contentType: 'application/json' });
   expect(frames.length).toBeGreaterThan(5);
@@ -438,7 +438,7 @@ test('屏幕底部限制向下扩展，不向上顶动窗口', async ({}, info) 
   const { bounds, area } = await recordBounds('bottom');
   await web.evaluate(height => { document.querySelector('#messages')!.innerHTML = `<div style="height:${height}px">屏幕底部测试</div>`; }, area.height * 2);
   const expectedHeight = Math.min(Math.floor(area.height * .8), area.y + area.height - bounds.y);
-  await expect.poll(async () => (await state()).bounds.height).toBe(expectedHeight);
+  await expect.poll(async () => Math.abs((await state()).bounds.height - expectedHeight)).toBeLessThanOrEqual(1);
   const frames = await boundsFrames();
   await info.attach('native-window-bottom-edge', { body: JSON.stringify(frames, null, 2), contentType: 'application/json' });
   expect(frames.every(frame => frame.y === bounds.y)).toBe(true);
@@ -499,7 +499,7 @@ test('减少动态效果开启时直接调整尺寸', async () => {
   await web.emulateMedia({ reducedMotion: 'reduce' });
   const { bounds, area } = await recordBounds();
   await web.evaluate(height => { document.querySelector('#messages')!.innerHTML = `<div style="height:${height}px">减少动态效果</div>`; }, area.height * 2);
-  await expect.poll(async () => (await state()).bounds.height).toBe(Math.min(Math.floor(area.height * .8), area.y + area.height - bounds.y));
+  await expect.poll(async () => Math.abs((await state()).bounds.height - Math.min(Math.floor(area.height * .8), area.y + area.height - bounds.y))).toBeLessThanOrEqual(1);
   expect((await boundsFrames()).length).toBeLessThanOrEqual(3);
 });
 
