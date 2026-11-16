@@ -29,7 +29,7 @@ async function fixtureBundle(destination: string, bundleVersion: string, actual 
     await cp(path.join(root, 'dist/main/install-update.js'), path.join(resources, 'app/install-update.cjs'));
   await cp(path.join(root, 'dist/main/runtime-files.json'), path.join(resources, 'app/runtime-files.json'));
     await writeFile(path.join(resources, 'app/package.json'), JSON.stringify({ name: 'wire-ds', version: bundleVersion, main: 'main.cjs' }));
-    await writeFile(path.join(resources, 'app/main.cjs'), `const {app,BrowserWindow}=require('electron');const fs=require('node:fs');const path=require('node:path');const updater=require('./install-update.cjs');globalThis.__installer=updater;const data=process.env.WIRE_DS_DATA_DIR;for(const name of ['userData','sessionData','logs','crashDumps']){const dir=path.join(data,name);fs.mkdirSync(dir,{recursive:true});app.setPath(name,dir)}app.setPath('userData',data);if(process.argv.includes('/S'))process.exit(3);if(app.getVersion()==='9.10.0'&&fs.existsSync(path.join(data,'fail-start')))process.exit(4);app.whenReady().then(()=>{updater.beginUpdateStartup(data,app.getVersion());const win=new BrowserWindow({width:400,height:300});win.loadURL('data:text/html,<h1>Update restart '+app.getVersion()+'</h1>');win.once('ready-to-show',()=>{updater.completeUpdateStartup(data,app.getVersion());fs.writeFileSync(path.join(data,'startup.json'),JSON.stringify({version:app.getVersion(),pid:process.pid}));win.show()})});process.on('SIGTERM',()=>app.quit());`);
+    await writeFile(path.join(resources, 'app/main.cjs'), `const {app,BrowserWindow}=require('electron');const fs=require('node:fs');const path=require('node:path');const updater=require('./install-update.cjs');globalThis.__installer=updater;const data=process.env.WIRE_DS_DATA_DIR;for(const name of ['userData','sessionData','logs','crashDumps']){const dir=path.join(data,name);fs.mkdirSync(dir,{recursive:true});app.setPath(name,dir)}app.setPath('userData',data);if(process.argv.includes('/S'))process.exit(3);if(app.getVersion()==='9.10.0'&&fs.existsSync(path.join(data,'fail-start')))process.exit(4);app.whenReady().then(()=>{updater.beginUpdateStartup(data,app.getVersion());const win=new BrowserWindow({width:400,height:300,show:false,webPreferences:{backgroundThrottling:false}});win.loadURL('data:text/html,<h1>Update restart '+app.getVersion()+'</h1>');win.once('ready-to-show',()=>{updater.completeUpdateStartup(data,app.getVersion());fs.writeFileSync(path.join(data,'startup.json'),JSON.stringify({version:app.getVersion(),pid:process.pid}));win.show()})});process.on('SIGTERM',()=>app.quit());`);
   }
   if (platform === 'darwin') {
     const plist = path.join(destination, 'Contents/Info.plist');
@@ -71,8 +71,19 @@ test.afterEach(async ({}, info) => {
     const log = await readFile(path.join(directory, 'profile/updates/install.log'), 'utf8').catch(() => '');
     await info.attach('native-install-log', { body: log, contentType: 'text/plain' });
     if (platform === 'win32' && helperPID) {
-      const processes = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -eq ${helperPID} -or $_.ParentProcessId -eq ${helperPID} } | Select-Object Name,ProcessId,ParentProcessId | ConvertTo-Json -Compress`], { encoding: 'utf8', timeout: 15_000 });
+      const processes = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -eq ${helperPID} -or $_.ParentProcessId -eq ${helperPID} } | Select-Object Name,ProcessId,ParentProcessId,ExecutablePath,CommandLine | ConvertTo-Json -Compress`], { encoding: 'utf8', timeout: 15_000 });
       await info.attach('native-update-processes', { body: processes, contentType: 'text/plain' });
+      if (info.status !== info.expectedStatus) {
+        const files: Record<string, string> = {};
+        for (const name of ['resources/app/package.json', 'resources/app/main.cjs']) files[name] = await readFile(path.join(directory, 'target/ChatDeepSeek', name), 'utf8').catch(String);
+        await info.attach('restored-application-files', { body: JSON.stringify(files, null, 2), contentType: 'application/json' });
+        const screenFile = info.outputPath('native-desktop.png');
+        const literal = screenFile.replace(/'/g, "''");
+        try {
+          execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `Add-Type -AssemblyName System.Windows.Forms; Add-Type -AssemblyName System.Drawing; $r=[Windows.Forms.Screen]::PrimaryScreen.Bounds; $b=New-Object Drawing.Bitmap($r.Width,$r.Height); $g=[Drawing.Graphics]::FromImage($b); $g.CopyFromScreen($r.Left,$r.Top,0,0,$r.Size); $b.Save('${literal}',[Drawing.Imaging.ImageFormat]::Png); $g.Dispose(); $b.Dispose()`], { timeout: 15_000 });
+          await info.attach('native-desktop', { path: screenFile, contentType: 'image/png' });
+        } catch {}
+      }
     }
   }
   for (const pid of [helperPID, childPID]) if (pid) { try { process.kill(pid, 'SIGTERM'); } catch {} }
