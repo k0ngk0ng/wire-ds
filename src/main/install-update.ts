@@ -15,7 +15,7 @@ interface InstallOptions {
   parentPID: number;
   restartTimeout?: number;
 }
-interface InstallState { status: string; version: string; pid?: number; reason?: string }
+interface InstallState { status: string; version: string; pid?: number; workerPID?: number; reason?: string }
 const stateFile = (directory: string) => path.join(directory, 'updates/install-state.json');
 export function readInstallState(directory: string): InstallState | undefined {
   try { return JSON.parse(readFileSync(stateFile(directory), 'utf8')); } catch { return undefined; }
@@ -84,15 +84,16 @@ export function windowsHelper(planFile: string) {
 $plan=[IO.File]::ReadAllText('${quoted}') | ConvertFrom-Json
 $launched=$null
 $attempted=$false
+function Write-Log($message) {try{[IO.File]::AppendAllText($plan.log,$message+[Environment]::NewLine)}catch{}}
 function Write-State($status,$reason) {
-  $value=@{status=$status;reason=$reason;version=$plan.version} | ConvertTo-Json -Compress
+  $value=@{status=$status;reason=$reason;version=$plan.version;workerPID=$PID} | ConvertTo-Json -Compress
   [IO.File]::WriteAllText($plan.state+'.tmp',$value)
   Move-Item -LiteralPath ($plan.state+'.tmp') -Destination $plan.state -Force
+  Write-Log $status
 }
 try {
   Write-State 'waiting-parent' ''
-  [Console]::WriteLine('Waiting for previous process '+$plan.parentPID)
-  [Console]::Out.Flush()
+  Write-Log ('Waiting for previous process '+$plan.parentPID)
   $deadline=[DateTime]::UtcNow.AddSeconds(60)
   while(Get-Process -Id $plan.parentPID -ErrorAction SilentlyContinue){if([DateTime]::UtcNow -gt $deadline){throw 'parent-timeout'};Start-Sleep -Milliseconds 100}
   $env:WIRE_DS_DATA_DIR=$plan.dataDirectory
@@ -100,20 +101,17 @@ try {
   $env:TMP=$plan.temporary
   $attempted=$true
   Write-State 'installing' ''
-  [Console]::WriteLine('Starting silent installer')
-  [Console]::Out.Flush()
+  Write-Log 'Starting silent installer'
   $installer=Start-Process -FilePath $plan.archive -ArgumentList ('/S --updated /D='+$plan.target) -PassThru
   $null=$installer.Handle
   if(-not $installer.WaitForExit(120000)){Stop-Process -Id $installer.Id -Force -ErrorAction SilentlyContinue;throw 'installer-timeout'}
   $installer.Refresh()
-  [Console]::WriteLine('Installer exited with '+$installer.ExitCode)
-  [Console]::Out.Flush()
+  Write-Log ('Installer exited with '+$installer.ExitCode)
   if($installer.ExitCode -ne 0){throw 'installer-failed'}
   $installed=[Diagnostics.FileVersionInfo]::GetVersionInfo($plan.executable).ProductVersion
   if($installed -notmatch ('^'+[Regex]::Escape($plan.version)+'(?:\\.0)?$')){throw 'version-mismatch'}
   Write-State 'awaiting-restart' ''
-  [Console]::WriteLine('Restarting updated application')
-  [Console]::Out.Flush()
+  Write-Log 'Restarting updated application'
   $launched=Start-Process -FilePath $plan.executable -ArgumentList '--updated' -PassThru
   $deadline=[DateTime]::UtcNow.AddMilliseconds($plan.restartTimeout)
   while([DateTime]::UtcNow -lt $deadline){
@@ -179,22 +177,26 @@ export async function prepareUpdate(options: InstallOptions) {
       const temporary = path.join(directory, 'temporary');
       await mkdir(temporary, { recursive: true });
       const planFile = path.join(directory, 'install-plan.json');
-      await writeFile(planFile, JSON.stringify({ ...options, executable, target, backup, state, acknowledgement, temporary, restartTimeout }), { mode: 0o600 });
-      command = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe');
-      args = ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(windowsHelper(planFile), 'utf16le').toString('base64')];
+      await writeFile(planFile, JSON.stringify({ ...options, executable, target, backup, state, acknowledgement, temporary, restartTimeout, log: path.join(directory, 'install.log') }), { mode: 0o600 });
+      const powershell = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe');
+      const encoded = Buffer.from(windowsHelper(planFile), 'utf16le').toString('base64');
+      command = process.env.ComSpec || path.join(process.env.SystemRoot || 'C:\\Windows', 'System32/cmd.exe');
+      args = ['/d', '/s', '/c', `""${powershell}" -NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand ${encoded}"`];
     }
     return {
       async start(): Promise<number> {
         await rm(acknowledgement, { force: true });
         await writeFile(state, JSON.stringify({ status: 'prepared', version: options.version }), { mode: 0o600 });
-        const log = openSync(path.join(directory, 'install.log'), 'a', 0o600);
+        const log = openSync(path.join(directory, mac ? 'install.log' : 'worker-startup.log'), 'a', 0o600);
+        if (!mac) await appendFile(path.join(directory, 'install.log'), '', { mode: 0o600 });
         try {
-          const child = spawn(command, args, { detached: options.platform !== 'win32', windowsHide: true, stdio: ['ignore', log, log] });
+          const stdio: ['ignore', number, number] = ['ignore', log, log];
+          const child = spawn(command, args, { detached: true, windowsHide: true, windowsVerbatimArguments: !mac, stdio });
           await new Promise<void>((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
           child.unref();
           for (let attempt = 0; attempt < 600; attempt++) {
             const status = readInstallState(options.dataDirectory);
-            if (status?.version === options.version && ['waiting-parent', 'installing', 'awaiting-restart', 'completed'].includes(status.status)) return child.pid!;
+            if (status?.version === options.version && ['waiting-parent', 'installing', 'awaiting-restart', 'completed'].includes(status.status)) return status.workerPID || child.pid!;
             if (child.exitCode !== null || child.signalCode !== null || status?.status === 'failed') break;
             await new Promise(resolve => setTimeout(resolve, 100));
           }
