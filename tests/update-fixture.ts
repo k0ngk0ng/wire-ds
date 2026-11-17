@@ -5,24 +5,38 @@ export async function startUpdateFixture(currentVersion: string) {
   let mode = 'available';
   let checks = 0;
   const downloads: string[] = [];
+  const requests: { method: string; url: string; apiHeaders: boolean }[] = [];
   const installer = Buffer.alloc(256 * 1024, 'ChatDeepSeek installer fixture');
-  const digest = `sha256:${createHash('sha256').update(installer).digest('hex')}`;
+  const digest = createHash('sha256').update(installer).digest('hex');
   let url = '';
   const server = http.createServer((req, res) => {
-    if (req.url === '/latest') {
+    requests.push({ method: req.method!, url: req.url!, apiHeaders: Boolean(req.headers['x-github-api-version'] || req.headers.accept?.includes('vnd.github')) });
+    const version = mode === 'current' || mode === 'draft' || mode === 'prerelease' ? currentVersion : mode === 'older' ? '0.9.9' : '9.10.0';
+    if (req.url === '/releases/latest') {
       checks++;
-      if (mode === 'offline' || mode === 'limited') { res.writeHead(mode === 'limited' ? 403 : 503); res.end(); return; }
-      if (mode === 'invalid-json') { res.end('{invalid'); return; }
-      const version = mode === 'current' ? currentVersion : mode === 'older' ? '0.9.9' : '9.10.0';
-      const assets = [['arm64', 'zip'], ['x64', 'zip'], ['x64', 'exe']].map(([arch, extension]) => {
-        const name = `ChatDeepSeek-${version}-${arch}.${extension}`;
-        return { name, browser_download_url: `${mode === 'untrusted' ? 'https://example.com' : url}/releases/download/v${version}/${name}`, size: installer.length, digest: mode === 'missing-digest' ? null : mode === 'corrupted' ? `sha256:${'0'.repeat(64)}` : digest };
-      });
-      res.setHeader('Content-Type', 'application/json');
-      res.end(JSON.stringify({ tag_name: mode === 'invalid-version' ? 'latest' : `v${version}`, draft: mode === 'draft', prerelease: mode === 'prerelease', assets: mode === 'missing-asset' ? [] : assets }));
+      if (['offline', 'limited', 'rate-limited'].includes(mode)) { res.writeHead(mode === 'limited' ? 403 : mode === 'rate-limited' ? 429 : 503); res.end(); return; }
+      if (mode === 'invalid-response') { res.end(); return; }
+      const source = mode === 'untrusted' ? 'https://example.com' : url;
+      res.writeHead(302, { Location: `${source}/releases/tag/${mode === 'invalid-version' ? 'latest' : `v${version}`}${mode === 'invalid-query' ? '?tag=1' : ''}` });
+      res.end();
+      return;
+    }
+    if (req.url?.startsWith('/releases/tag/')) { res.end('<html>Public release</html>'); return; }
+    if (/\/SHA256SUMS-(?:mac|win)-(?:arm64|x64)\.txt$/.test(req.url || '')) {
+      if (mode === 'missing-digest') { res.writeHead(404); res.end(); return; }
+      const entries = [['arm64', 'zip'], ['x64', 'zip'], ['x64', 'exe']].map(([arch, extension]) => `${mode === 'corrupted' ? '0'.repeat(64) : digest}  ChatDeepSeek-${version}-${arch}.${extension}`);
+      const content = mode === 'invalid-checksum' ? 'invalid' : mode === 'wrong-file' ? `${digest}  other.zip` : mode === 'duplicate-checksum' ? [...entries, ...entries].join('\n') : mode === 'oversized-checksum' ? 'x'.repeat(65537) : entries.join('\r\n') + '\r\n';
+      res.setHeader('Content-Type', 'text/plain');
+      res.end(content);
       return;
     }
     if (req.url?.startsWith('/releases/download/')) {
+      if (req.method === 'HEAD') {
+        if (mode === 'missing-asset') { res.writeHead(404); res.end(); return; }
+        if (mode !== 'missing-size') res.setHeader('Content-Length', mode === 'oversized-asset' ? 1024 ** 3 + 1 : mode === 'empty-asset' ? 0 : installer.length);
+        res.end();
+        return;
+      }
       downloads.push(req.url);
       if (mode === 'download-error') { res.writeHead(500); res.end(); return; }
       res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': installer.length });
@@ -43,8 +57,8 @@ export async function startUpdateFixture(currentVersion: string) {
   return {
     url, installer,
     setMode(value: string) { mode = value; },
-    reset() { mode = 'available'; checks = 0; downloads.length = 0; },
-    state: () => ({ checks, downloads: [...downloads] }),
+    reset() { mode = 'available'; checks = 0; downloads.length = 0; requests.length = 0; },
+    state: () => ({ checks, downloads: [...downloads], requests: [...requests] }),
     close: () => new Promise<void>(resolve => { server.closeAllConnections(); server.close(() => resolve()); }),
   };
 }

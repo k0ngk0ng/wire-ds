@@ -15,7 +15,7 @@ interface UpdateOptions {
   onChange: () => void;
   installUpdate: (file: string, version: string) => Promise<void>;
 }
-interface ReleaseAsset { name: string; browser_download_url: string; digest: string; size: number }
+interface ReleaseAsset { name: string; url: string; digest: string; size: number }
 
 const repository = 'https://github.com/k0ngk0ng/wire-ds';
 const versionParts = (version: string) => /^\d+\.\d+\.\d+$/.test(version) ? version.split('.').map(Number) : undefined;
@@ -24,6 +24,23 @@ function newerVersion(next: string, current: string) {
   if (!left || !right || [...left, ...right].some(value => !Number.isSafeInteger(value))) throw new Error('GitHub 返回了无效的版本号，请稍后重试。');
   for (let i = 0; i < 3; i++) if (left[i] !== right[i]) return left[i] > right[i];
   return false;
+}
+
+async function checksumText(response: Response) {
+  if (!response.body) throw new Error('更新校验文件为空，请稍后重试。');
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let length = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      length += value.byteLength;
+      if (length > 65536) throw new Error('更新校验文件过大，请稍后重试。');
+      chunks.push(value);
+    }
+  } finally { await reader.cancel().catch(() => {}); }
+  return Buffer.concat(chunks).toString('utf8');
 }
 
 export class ReleaseUpdater {
@@ -50,9 +67,33 @@ export class ReleaseUpdater {
     this.pending = task().finally(() => { this.pending = undefined; });
     return this.pending;
   }
-  private async request(url: string, timeout: number) {
+  private releaseLocation(url: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const request = net.request({ url, method: 'HEAD', redirect: 'manual' });
+      const signal = AbortSignal.any([this.controller!.signal, AbortSignal.timeout(20_000)]);
+      let settled = false;
+      const finish = (error?: Error, location?: string) => {
+        if (settled) return;
+        settled = true;
+        signal.removeEventListener('abort', abort);
+        request.abort();
+        if (error) reject(error); else resolve(location!);
+      };
+      const abort = () => finish(new Error('GitHub 更新检查已取消或超时，请重试。'));
+      request.setHeader('User-Agent', `ChatDeepSeek/${this.options.version}`);
+      request.once('redirect', (_status, _method, location) => finish(undefined, location));
+      request.once('response', response => {
+        finish(new Error(response.statusCode === 403 || response.statusCode === 429 ? 'GitHub 请求受限，请稍后重试。' : 'GitHub 未返回稳定版本地址，请稍后重试。'));
+      });
+      request.once('error', error => finish(error));
+      signal.addEventListener('abort', abort, { once: true });
+      if (signal.aborted) abort(); else request.end();
+    });
+  }
+  private async request(url: string, timeout: number, options: Pick<RequestInit, 'method'> = {}) {
     const response = await net.fetch(url, {
-      headers: { Accept: 'application/vnd.github+json', 'User-Agent': `ChatDeepSeek/${this.options.version}`, 'X-GitHub-Api-Version': '2022-11-28' },
+      ...options,
+      headers: { 'User-Agent': `ChatDeepSeek/${this.options.version}` },
       cache: 'no-store', signal: AbortSignal.any([this.controller!.signal, AbortSignal.timeout(timeout)]),
     });
     if (response.status === 403 || response.status === 429) throw new Error('GitHub 请求受限，请稍后重试。');
@@ -65,24 +106,29 @@ export class ReleaseUpdater {
       this.target = undefined;
       this.publish({ status: 'checking', version: '', progress: 0, message: '正在检查更新…' });
       try {
-        const response = await this.request(this.options.endpoint || 'https://api.github.com/repos/k0ngk0ng/wire-ds/releases/latest', 20_000);
-        const release = await response.json() as { tag_name?: unknown; draft?: unknown; prerelease?: unknown; assets?: unknown };
-        if (!release || typeof release.tag_name !== 'string' || !Array.isArray(release.assets) || typeof release.draft !== 'boolean' || typeof release.prerelease !== 'boolean') throw new Error('GitHub 返回了无效的更新信息，请稍后重试。');
-        const version = release.tag_name.replace(/^v/, '');
+        const endpoint = this.options.endpoint || `${repository}/releases/latest`;
+        const source = this.options.endpoint ? new URL(endpoint).origin : repository;
+        const release = new URL(await this.releaseLocation(endpoint), endpoint);
+        const prefix = `${source}/releases/tag/v`;
+        if (!release.href.startsWith(prefix) || release.search || release.hash) throw new Error('GitHub 返回了无效的稳定版本地址，请稍后重试。');
+        const version = release.href.slice(prefix.length);
         const newer = newerVersion(version, this.options.version);
-        if (!newer || release.draft || release.prerelease) {
+        if (!newer) {
           this.publish({ status: 'current', version: this.options.version, progress: 0, message: '已是最新稳定版本' });
           return { ok: true };
         }
         const extension = this.options.platform === 'darwin' ? 'zip' : this.options.platform === 'win32' ? 'exe' : '';
         if (!extension || !['arm64', 'x64'].includes(this.options.arch)) throw new Error('更新暂不支持此系统或架构，请查看 GitHub Releases。');
         const name = `ChatDeepSeek-${version}-${this.options.arch}.${extension}`;
-        const asset = release.assets.find(value => value && typeof value === 'object' && value.name === name) as ReleaseAsset | undefined;
-        const source = this.options.endpoint ? new URL(this.options.endpoint).origin : repository;
-        const expectedURL = `${source}/releases/download/${release.tag_name}/${name}`;
-        if (!asset) throw new Error('更新安装包尚未就绪，请稍后重试。');
-        if (asset.browser_download_url !== expectedURL || !/^sha256:[a-f0-9]{64}$/i.test(asset.digest || '') || !Number.isSafeInteger(asset.size) || asset.size <= 0 || asset.size > 1024 ** 3) throw new Error('更新安装包的来源或校验信息无效，请稍后重试。');
-        this.target = { ...asset };
+        const download = `${source}/releases/download/v${version}`;
+        const checksums = await checksumText(await this.request(`${download}/SHA256SUMS-${this.options.platform === 'darwin' ? 'mac' : 'win'}-${this.options.arch}.txt`, 20_000));
+        const matches = checksums.split(/\r?\n/).map(line => line.match(/^([a-f0-9]{64}) [ *](.+)$/i)).filter(match => match?.[2] === name);
+        if (matches.length !== 1) throw new Error('更新安装包的校验信息无效，请稍后重试。');
+        const url = `${download}/${name}`;
+        const metadata = await this.request(url, 20_000, { method: 'HEAD' });
+        const size = Number(metadata.headers.get('content-length'));
+        if (!Number.isSafeInteger(size) || size <= 0 || size > 1024 ** 3) throw new Error('更新安装包的大小无效，请稍后重试。');
+        this.target = { name, url, size, digest: matches[0]![1].toLowerCase() };
         this.publish({ status: 'available', version, progress: 0, message: `发现新版本 ${version}` });
         return { ok: true };
       } catch (error) { return this.error(error); }
@@ -97,7 +143,7 @@ export class ReleaseUpdater {
       this.publish({ ...this.state, status: 'downloading', progress: 0, message: '正在下载更新…' });
       try {
         await mkdir(this.options.directory, { recursive: true });
-        const response = await this.request(target.browser_download_url, 300_000);
+        const response = await this.request(target.url, 300_000);
         if (!response.body) throw new Error('下载响应为空，请重新检查更新。');
         const handle = await open(partial, 'w', 0o600);
         const hash = createHash('sha256');
@@ -115,7 +161,7 @@ export class ReleaseUpdater {
             if (progress !== this.state.progress) this.publish({ ...this.state, progress, message: `正在下载更新… ${progress}%` });
           }
         } finally { await reader.cancel().catch(() => {}); await handle.close(); }
-        if (received !== target.size || hash.digest('hex') !== target.digest.slice(7).toLowerCase()) throw new Error('下载校验失败，请重新检查更新并下载。');
+        if (received !== target.size || hash.digest('hex') !== target.digest) throw new Error('下载校验失败，请重新检查更新并下载。');
         await rename(partial, file);
         this.publish({ ...this.state, status: 'ready', progress: 100, message: `版本 ${this.state.version} 已下载并通过校验` });
         return { ok: true };
@@ -131,7 +177,7 @@ export class ReleaseUpdater {
         if ((await stat(file)).size !== target.size) throw new Error('安装包校验失败，请重新检查更新并下载。');
         const hash = createHash('sha256');
         for await (const chunk of createReadStream(file)) hash.update(chunk);
-        if (hash.digest('hex') !== target.digest.slice(7).toLowerCase()) throw new Error('安装包校验失败，请重新检查更新并下载。');
+        if (hash.digest('hex') !== target.digest) throw new Error('安装包校验失败，请重新检查更新并下载。');
         this.publish({ ...this.state, status: 'installing', message: '正在安装更新，应用即将自动重启…' });
         await this.options.installUpdate(file, this.state.version);
         return { ok: true };

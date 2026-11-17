@@ -100,7 +100,7 @@ test.afterEach(async ({}, info) => {
   for (const pid of [helperPID, childPID]) if (pid) {
     try {
       if (platform === 'win32') execFileSync('taskkill.exe', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore', timeout: 15_000 });
-      else process.kill(pid, 'SIGTERM');
+      else process.kill(pid, 'SIGKILL');
     } catch {}
   }
   await desktop?.close().catch(() => {});

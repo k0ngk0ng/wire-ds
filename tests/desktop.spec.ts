@@ -22,7 +22,7 @@ async function launch(name: string, existing = false) {
     colorScheme: null,
     chromiumSandbox: true,
     artifactsDir: path.join(root, 'artifacts', 'electron'),
-    env: { ...process.env, WIRE_DS_TEST: '1', WIRE_DS_TEST_URL: service.url, WIRE_DS_TEST_UPDATE_URL: `${releases.url}/latest`, WIRE_DS_DATA_DIR: dataDir, WIRE_DS_TEST_SHORTCUT: 'F6', TMPDIR: path.join(root, '.cache/tmp') },
+    env: { ...process.env, WIRE_DS_TEST: '1', WIRE_DS_TEST_URL: service.url, WIRE_DS_TEST_UPDATE_URL: `${releases.url}/releases/latest`, WIRE_DS_DATA_DIR: dataDir, WIRE_DS_TEST_SHORTCUT: 'F6', TMPDIR: path.join(root, '.cache/tmp') },
     timeout: 30_000,
   });
   // BrowserWindow and WebContentsView targets can arrive in different orders on CI.
@@ -607,7 +607,7 @@ test('呼出后用户选择其他输入框或打开网页弹层时尊重焦点�
   await expect(input).not.toBeFocused();
 });
 
-test('点击一次更新即可下载、校验并安排自动安装重启', async () => {
+test('更新通过公开发布入口和校验文件下载，点击一次即可安排自动安装重启', async ({}, info) => {
   await launch('updates-download'); await signIn();
   expect((await state()).version).toBe(JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')).version);
   const prefs = await settings();
@@ -620,6 +620,14 @@ test('点击一次更新即可下载、校验并安排自动安装重启', async
   const extension = process.platform === 'darwin' ? 'zip' : 'exe';
   const name = `ChatDeepSeek-9.10.0-${process.arch}.${extension}`;
   expect(releases.state().downloads).toEqual([`/releases/download/v9.10.0/${name}`]);
+  const checksum = `SHA256SUMS-${process.platform === 'darwin' ? 'mac' : 'win'}-${process.arch}.txt`;
+  expect(releases.state().requests).toEqual([
+    { method: 'HEAD', url: '/releases/latest', apiHeaders: false },
+    { method: 'GET', url: `/releases/download/v9.10.0/${checksum}`, apiHeaders: false },
+    { method: 'HEAD', url: `/releases/download/v9.10.0/${name}`, apiHeaders: false },
+    { method: 'GET', url: `/releases/download/v9.10.0/${name}`, apiHeaders: false },
+  ]);
+  await info.attach('public-release-requests', { body: JSON.stringify(releases.state().requests, null, 2), contentType: 'application/json' });
   expect(await readFile(path.join(dataDir, 'updates', name))).toEqual(releases.installer);
   await expect.poll(async () => (await state()).installedUpdate).toBe(path.join(dataDir, 'updates', name));
   await expect(prefs.locator('#update-status')).toContainText('重启');
@@ -638,10 +646,10 @@ test('更新检查忽略旧版本、当前版本、草稿和预发行版本', as
   expect(releases.state().downloads).toEqual([]);
 });
 
-test('更新检查拒绝无效版本、损坏元数据、缺失平台安装包及不可信下载地址', async () => {
+test('更新检查拒绝无效跳转、损坏校验文件及缺失或过大的安装包', async () => {
   await launch('updates-invalid-release');
   const prefs = await settings();
-  for (const mode of ['invalid-version', 'invalid-json', 'missing-asset', 'untrusted', 'missing-digest']) {
+  for (const mode of ['invalid-version', 'invalid-response', 'invalid-query', 'untrusted', 'missing-digest', 'invalid-checksum', 'duplicate-checksum', 'wrong-file', 'oversized-checksum', 'missing-asset', 'missing-size', 'empty-asset', 'oversized-asset']) {
     releases.setMode(mode);
     await prefs.getByRole('button', { name: '检查更新', exact: true }).click();
     await expect.poll(async () => (await state()).update.status).toBe('error');
@@ -654,7 +662,7 @@ test('更新检查拒绝无效版本、损坏元数据、缺失平台安装包�
 test('更新网络故障和限流可重试，重复操作只发送一次请求', async () => {
   await launch('updates-retry');
   const prefs = await settings();
-  for (const mode of ['offline', 'limited']) {
+  for (const mode of ['offline', 'limited', 'rate-limited']) {
     releases.setMode(mode);
     await prefs.getByRole('button', { name: '检查更新', exact: true }).click();
     await expect.poll(async () => (await state()).update.status).toBe('error');
