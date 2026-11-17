@@ -45,6 +45,9 @@ jobs:
       - name: Desktop E2E
         if: (matrix.arch == 'arm64' || matrix.platform == 'win') && !inputs.windows_native_only
         run: npm run test:e2e
+      - name: Report desktop E2E
+        if: always() && (matrix.arch == 'arm64' || matrix.platform == 'win') && !inputs.windows_native_only
+        run: node scripts/report-e2e.mjs artifacts/e2e-results.json
       - name: Package application
         run: npm run build && node scripts/package.mjs --${{ matrix.platform }} --${{ matrix.arch }}
       - name: Verify macOS signature
@@ -53,6 +56,9 @@ jobs:
       - name: Native update installation E2E
         if: matrix.arch == 'arm64' || matrix.platform == 'win'
         run: npm run test:install
+      - name: Report native E2E
+        if: always() && (matrix.arch == 'arm64' || matrix.platform == 'win')
+        run: node scripts/report-e2e.mjs artifacts/install-results.json
       - name: Upload installers
         uses: actions/upload-artifact@v4
         with:
